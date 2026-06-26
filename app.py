@@ -219,7 +219,7 @@ def inject_css():
         body {{ -webkit-print-color-adjust:exact !important; }}
     }}
     </style>
-    """)
+    """, unsafe_allow_html=True)
 
 # ─── JAVASCRIPT — botão expandir menu (sidebar colapsado) ────────────────────
 
@@ -539,7 +539,7 @@ def page_login():
         <div style="font-size:0.82rem;color:{DGRAY};margin-bottom:28px;">
             Sistema de Score de Fornecedores
         </div>
-    </div>""")
+    </div>""", unsafe_allow_html=True)
 
     c1, c2, c3 = st.columns([1, 1.1, 1])
     with c2:
@@ -551,7 +551,7 @@ def page_login():
                 st.rerun()
             else:
                 st.error("Senha incorreta.")
-        st.markdown(f"""
+        st.html(f"""
         <div style="text-align:center;margin-top:20px;font-size:0.72rem;color:rgba(30,39,97,0.4);">
             Selgron Industrial · Suprimentos · 2026
         </div>""")
@@ -576,7 +576,7 @@ PAGES_KEYS = [
 def show_sidebar(df: pd.DataFrame):
     with st.sidebar:
         # Logo Selgron com ícone real
-        st.markdown(f"""
+        st.html(f"""
         <div style="padding:16px 16px 14px;border-bottom:1px solid rgba(247,166,0,0.25);margin-bottom:14px;">
             <div style="display:flex;align-items:center;gap:10px;">
                 <img src="data:image/png;base64,{LOGO_ICON_B64}"
@@ -608,7 +608,7 @@ def show_sidebar(df: pd.DataFrame):
         n_exc  = len(df[df["CLASSE"].str.startswith("A")])
         avg    = df["SCORE_GERAL"].mean()
 
-        st.markdown(f"""
+        st.html(f"""
         <div style="font-size:0.65rem;color:{GOLD};font-weight:700;text-transform:uppercase;
                     letter-spacing:0.1em;margin-bottom:8px;">Resumo</div>
         <div style="font-size:0.8rem;line-height:2.1;">
@@ -626,7 +626,7 @@ def show_sidebar(df: pd.DataFrame):
             st.rerun()
 
         if st.session_state.data_info:
-            st.markdown(f"""
+            st.html(f"""
             <div style="font-size:0.62rem;color:rgba(255,255,255,0.3);margin-top:10px;line-height:1.5;">
                 {st.session_state.data_info}
             </div>""")
@@ -637,7 +637,7 @@ def show_top_nav():
     current = st.session_state.page
     labels  = ["🏠 Geral", "📊 Comprador", "🏭 Fornecedor", "⚠️ Prioritário", "📤 Base"]
 
-    st.html(f"""
+    st.markdown(f"""
     <style>
     /* Estilo dos botões do nav bar */
     div[data-testid="stHorizontalBlock"] .stButton button {{
@@ -655,7 +655,7 @@ def show_top_nav():
              style="width:28px;height:28px;object-fit:cover;border-radius:4px;flex-shrink:0;">
         <span style="color:{GOLD};font-weight:800;font-size:1rem;letter-spacing:-0.5px;
                      margin-right:6px;flex-shrink:0;">selgron</span>
-    </div>""")
+    </div>""", unsafe_allow_html=True)
 
     cols = st.columns(5, gap="small")
     for col, label, key in zip(cols, labels, PAGES_KEYS):
@@ -895,7 +895,7 @@ def page_ficha(df: pd.DataFrame):
             <td style="padding:5px 14px;text-align:center;font-weight:700;color:{cdata['text']};">{atual}</td>
         </tr>"""
 
-    st.markdown("""
+    st.html("""
     <div class="no-print" style="margin-bottom:14px;">
         <button onclick="window.print()" style="
             background:#1E2761;color:white;border:none;padding:8px 22px;
@@ -1099,7 +1099,7 @@ def page_atualizar(df: pd.DataFrame):
     left, right = st.columns([1, 1])
 
     with left:
-        st.markdown(f"""
+        st.html(f"""
         <div style="background:{LGRAY};border-radius:10px;padding:20px 24px;border:1px solid {MGRAY};">
             <div class="sec-title">Como preparar a planilha</div>
             <div style="background:{BG_BLUE};border-radius:8px;padding:14px;margin-bottom:12px;">
@@ -1132,7 +1132,7 @@ def page_atualizar(df: pd.DataFrame):
         </div>""")
 
     with right:
-        st.markdown(f"""
+        st.html(f"""
         <div style="background:white;border-radius:10px;padding:20px 24px;border:1px solid {MGRAY};">
             <div class="sec-title">Importar Planilha</div>""")
 
@@ -1159,7 +1159,7 @@ def page_atualizar(df: pd.DataFrame):
                 st.success("Dashboard atualizado!")
                 st.rerun()
 
-        st.markdown(f"""
+        st.html(f"""
         <div style="background:{LGRAY};border-radius:8px;padding:14px 18px;margin-top:16px;border:1px solid {MGRAY};">
             <div style="font-size:0.68rem;font-weight:700;color:{DGRAY};text-transform:uppercase;margin-bottom:8px;">Base Atual</div>
             <div style="font-size:0.82rem;color:{DGRAY};line-height:2;">
