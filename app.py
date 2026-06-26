@@ -219,7 +219,7 @@ def inject_css():
         body {{ -webkit-print-color-adjust:exact !important; }}
     }}
     </style>
-    """, unsafe_allow_html=True)
+    """)
 
 # ─── JAVASCRIPT — botão expandir menu (sidebar colapsado) ────────────────────
 
@@ -539,7 +539,7 @@ def page_login():
         <div style="font-size:0.82rem;color:{DGRAY};margin-bottom:28px;">
             Sistema de Score de Fornecedores
         </div>
-    </div>""", unsafe_allow_html=True)
+    </div>""")
 
     c1, c2, c3 = st.columns([1, 1.1, 1])
     with c2:
@@ -554,7 +554,7 @@ def page_login():
         st.markdown(f"""
         <div style="text-align:center;margin-top:20px;font-size:0.72rem;color:rgba(30,39,97,0.4);">
             Selgron Industrial · Suprimentos · 2026
-        </div>""", unsafe_allow_html=True)
+        </div>""")
 
 # ─── SIDEBAR ─────────────────────────────────────────────────────────────────
 
@@ -586,7 +586,7 @@ def show_sidebar(df: pd.DataFrame):
                     <div style="font-size:0.6rem;color:rgba(255,255,255,0.45);text-transform:uppercase;letter-spacing:0.12em;">Score de Fornecedores</div>
                 </div>
             </div>
-        </div>""", unsafe_allow_html=True)
+        </div>""")
 
         # Radio sincronizado com session_state.page
         current_idx = PAGES_KEYS.index(st.session_state.page) if st.session_state.page in PAGES_KEYS else 0
@@ -617,7 +617,7 @@ def show_sidebar(df: pd.DataFrame):
             🟢 Excelentes (A): {n_exc}<br>
             🟠 Atencao (D): {n_atn}<br>
             🔴 Criticos (E): {n_crit}
-        </div>""", unsafe_allow_html=True)
+        </div>""")
 
         st.markdown("---")
         if st.button("🚪 Sair", use_container_width=True):
@@ -629,7 +629,7 @@ def show_sidebar(df: pd.DataFrame):
             st.markdown(f"""
             <div style="font-size:0.62rem;color:rgba(255,255,255,0.3);margin-top:10px;line-height:1.5;">
                 {st.session_state.data_info}
-            </div>""", unsafe_allow_html=True)
+            </div>""")
 
 
 def show_top_nav():
@@ -655,7 +655,7 @@ def show_top_nav():
              style="width:28px;height:28px;object-fit:cover;border-radius:4px;flex-shrink:0;">
         <span style="color:{GOLD};font-weight:800;font-size:1rem;letter-spacing:-0.5px;
                      margin-right:6px;flex-shrink:0;">selgron</span>
-    </div>""", unsafe_allow_html=True)
+    </div>""")
 
     cols = st.columns(5, gap="small")
     for col, label, key in zip(cols, labels, PAGES_KEYS):
@@ -904,7 +904,7 @@ def page_ficha(df: pd.DataFrame):
             🖨️ Imprimir / Salvar PDF
         </button>
         <span style="font-size:0.75rem;color:#888;margin-left:12px;">Ctrl+P → Salvar como PDF</span>
-    </div>""", unsafe_allow_html=True)
+    </div>""")
 
     st.html(f"""
     <div class="ficha-wrap">
@@ -1129,12 +1129,12 @@ def page_atualizar(df: pd.DataFrame):
                         font-size:0.75rem;color:{C_RED};">
                 ⚠️ A importacao substitui a base atual.
             </div>
-        </div>""", unsafe_allow_html=True)
+        </div>""")
 
     with right:
         st.markdown(f"""
         <div style="background:white;border-radius:10px;padding:20px 24px;border:1px solid {MGRAY};">
-            <div class="sec-title">Importar Planilha</div>""", unsafe_allow_html=True)
+            <div class="sec-title">Importar Planilha</div>""")
 
         uploaded = st.file_uploader("Selecione o Excel (.xlsx)", type=["xlsx","xls"], key="uploader_main")
 
@@ -1159,8 +1159,6 @@ def page_atualizar(df: pd.DataFrame):
                 st.success("Dashboard atualizado!")
                 st.rerun()
 
-        st.markdown("</div>", unsafe_allow_html=True)
-
         st.markdown(f"""
         <div style="background:{LGRAY};border-radius:8px;padding:14px 18px;margin-top:16px;border:1px solid {MGRAY};">
             <div style="font-size:0.68rem;font-weight:700;color:{DGRAY};text-transform:uppercase;margin-bottom:8px;">Base Atual</div>
@@ -1171,7 +1169,7 @@ def page_atualizar(df: pd.DataFrame):
                 🔴 Criticos (E): {len(df[df['CLASSE'].str.startswith("E")])}<br>
                 🟠 Atencao (D): {len(df[df['CLASSE'].str.startswith("D")])}
             </div>
-        </div>""", unsafe_allow_html=True)
+        </div>""")
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 
