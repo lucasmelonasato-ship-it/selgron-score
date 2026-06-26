@@ -122,32 +122,20 @@ def inject_css():
         border:1px solid rgba(247,166,0,0.35) !important; border-radius:6px;
     }}
 
-    /* ── Sidebar toggle button — sempre visível ── */
-    [data-testid="collapsedControl"] {{
-        display:flex !important;
-        background:{GOLD} !important;
-        border-radius:0 8px 8px 0 !important;
-        color:{NAVY} !important;
-        width:28px !important;
-        height:56px !important;
-        align-items:center;
-        justify-content:center;
-        box-shadow:2px 0 8px rgba(0,0,0,0.2);
-        top:50vh !important;
-        position:fixed !important;
-        left:0 !important;
-    }}
-    [data-testid="collapsedControl"] svg {{ fill:{NAVY} !important; }}
+    /* ── Sidebar collapse button (seta de recolher dentro do menu) ── */
     [data-testid="stSidebarCollapseButton"] button {{
-        background:rgba(247,166,0,0.15) !important;
-        border:1px solid rgba(247,166,0,0.3) !important;
+        background:rgba(247,166,0,0.18) !important;
+        border:1px solid rgba(247,166,0,0.4) !important;
         border-radius:6px !important;
         color:{GOLD} !important;
+        width:36px !important;
+        height:36px !important;
     }}
     [data-testid="stSidebarCollapseButton"] button:hover {{
         background:{GOLD} !important;
         color:{NAVY} !important;
     }}
+    /* ── Botão de EXPANDIR (quando menu está fechado) — forçado via JS abaixo ── */
 
     /* ── Main BG ── */
     [data-testid="stAppViewContainer"] > .main {{ background:#F4F5F9; }}
@@ -232,6 +220,53 @@ def inject_css():
     }}
     </style>
     """, unsafe_allow_html=True)
+
+# ─── JAVASCRIPT — botão expandir menu (sidebar colapsado) ────────────────────
+
+def inject_sidebar_js():
+    """Injeta JS que mantém o botão de expandir sidebar sempre visível e estilizado."""
+    import streamlit.components.v1 as components
+    components.html("""
+    <script>
+    (function() {
+        function fixExpandBtn() {
+            // Tenta no documento pai (Streamlit usa iframe)
+            var root = window.parent.document;
+            var btn = root.querySelector('[data-testid="collapsedControl"]');
+            if (btn) {
+                btn.style.display         = 'flex';
+                btn.style.opacity         = '1';
+                btn.style.visibility      = 'visible';
+                btn.style.background      = '#F7A600';
+                btn.style.width           = '34px';
+                btn.style.height          = '62px';
+                btn.style.borderRadius    = '0 10px 10px 0';
+                btn.style.cursor          = 'pointer';
+                btn.style.position        = 'fixed';
+                btn.style.left            = '0';
+                btn.style.top             = '44vh';
+                btn.style.zIndex          = '9999';
+                btn.style.alignItems      = 'center';
+                btn.style.justifyContent  = 'center';
+                btn.style.boxShadow       = '3px 2px 14px rgba(0,0,0,0.35)';
+                btn.style.border          = 'none';
+                btn.style.transition      = 'background 0.2s';
+                var svg = btn.querySelector('svg');
+                if (svg) {
+                    svg.style.fill   = '#1E2761';
+                    svg.style.width  = '18px';
+                    svg.style.height = '18px';
+                }
+                btn.onmouseenter = function(){ this.style.background = '#1E2761'; var s=this.querySelector('svg'); if(s) s.style.fill='#F7A600'; };
+                btn.onmouseleave = function(){ this.style.background = '#F7A600'; var s=this.querySelector('svg'); if(s) s.style.fill='#1E2761'; };
+            }
+        }
+        // Executa agora e a cada 400ms (cobre re-renders do Streamlit)
+        fixExpandBtn();
+        setInterval(fixExpandBtn, 400);
+    })();
+    </script>
+    """, height=0, scrolling=False)
 
 # ─── SESSION STATE ────────────────────────────────────────────────────────────
 
@@ -1049,9 +1084,21 @@ def main():
         st.session_state.df = df
         st.session_state.data_info = info
 
+    # Injeta JS para botão de expandir menu — roda em toda navegação
+    inject_sidebar_js()
+
     df   = st.session_state.df
     page = show_sidebar(df)
     key  = page.split("  ", 1)[-1].strip()
+
+    # Banner de dados de demonstração
+    if "DEMO" in st.session_state.data_info:
+        st.warning(
+            "⚠️ **Dados de demonstração** — Os nomes de fornecedores exibidos são placeholders gerados automaticamente. "
+            "Para ver os dados reais da Selgron, vá em **📤 Atualizar Base** e importe o arquivo "
+            "`Score_Fornecedores_Selgron_v7.xlsx`.",
+            icon=None
+        )
 
     if   "Painel Geral"      in key: page_dashboard(df)
     elif "Painel Comprador"  in key: page_por_comprador(df)
