@@ -268,10 +268,50 @@ def inject_sidebar_js():
     </script>
     """, height=0, scrolling=False)
 
+# ─── PERSISTÊNCIA COMPARTILHADA (dados visíveis para todos os usuários) ──────
+# Quando alguém importa uma planilha, os dados são salvos neste arquivo.
+# Todos os outros usuários carregam automaticamente na próxima interação.
+
+DATA_FILE      = "selgron_data.parquet"   # dados principais (parquet = rápido)
+DATA_INFO_FILE = "selgron_data_info.txt"  # texto informativo da importação
+
+def save_shared_data(df: pd.DataFrame, info: str) -> bool:
+    """Salva os dados no disco — compartilhado entre TODOS os usuários."""
+    try:
+        df.to_parquet(DATA_FILE, index=False)
+        with open(DATA_INFO_FILE, "w", encoding="utf-8") as f:
+            f.write(info)
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        return False
+
+def get_data_mtime() -> float:
+    """Retorna o timestamp de modificação do arquivo de dados compartilhado."""
+    try:
+        return os.path.getmtime(DATA_FILE)
+    except:
+        return 0.0
+
+def load_shared_data():
+    """Carrega dados do arquivo compartilhado no disco (todos os usuários)."""
+    if os.path.exists(DATA_FILE):
+        try:
+            df = pd.read_parquet(DATA_FILE)
+            info = ""
+            if os.path.exists(DATA_INFO_FILE):
+                with open(DATA_INFO_FILE, "r", encoding="utf-8") as f:
+                    info = f.read()
+            return df, info
+        except Exception:
+            pass
+    return None, None
+
 # ─── SESSION STATE ────────────────────────────────────────────────────────────
 
 def init_state():
-    for k, v in [("authenticated", False), ("df", None), ("data_info", ""), ("page", "Painel Geral")]:
+    for k, v in [("authenticated", False), ("df", None), ("data_info", ""),
+                 ("page", "Painel Geral"), ("data_mtime", 0.0)]:
         if k not in st.session_state:
             st.session_state[k] = v
 
@@ -1152,11 +1192,16 @@ def page_atualizar(df: pd.DataFrame):
             for c in ["SCORE_GERAL","SCORE_PRAZO","SCORE_QUALIDADE"]:
                 if c in prev.columns: prev[c] = prev[c].apply(pct)
             st.dataframe(prev, use_container_width=True, hide_index=True)
-            if st.button("✅ Confirmar e atualizar", type="primary", use_container_width=True):
-                st.session_state.df = df_new
-                st.session_state.data_info = msg
-                st.cache_data.clear()
-                st.success("Dashboard atualizado!")
+            if st.button("✅ Confirmar e salvar para todos", type="primary", use_container_width=True):
+                # Salva no disco — todos os usuários verão os dados
+                saved = save_shared_data(df_new, msg)
+                st.session_state.df         = df_new
+                st.session_state.data_info  = msg
+                st.session_state.data_mtime = get_data_mtime()
+                if saved:
+                    st.success("✅ Dados salvos! Todos os compradores e o diretor verão a base atualizada ao recarregar a página.")
+                else:
+                    st.warning("⚠️ Dados carregados nesta sessão, mas não foi possível salvar no disco. Outros usuários não verão a atualização.")
                 st.rerun()
 
         st.html(f"""
@@ -1181,11 +1226,25 @@ def main():
         page_login()
         return
 
-    if st.session_state.df is None:
-        with st.spinner("Carregando dados..."):
-            df, info = load_local_score()
-        st.session_state.df = df
-        st.session_state.data_info = info
+    # ── Carregamento de dados com detecção automática de atualização ──
+    # Verifica se outro usuário salvou dados mais novos no disco
+    disk_mtime = get_data_mtime()
+    session_mtime = st.session_state.get("data_mtime", 0.0)
+
+    if st.session_state.df is None or disk_mtime > session_mtime:
+        # Tenta carregar do arquivo compartilhado (importado por outro usuário)
+        df_shared, info_shared = load_shared_data()
+        if df_shared is not None:
+            st.session_state.df       = df_shared
+            st.session_state.data_info = info_shared
+            st.session_state.data_mtime = disk_mtime
+        elif st.session_state.df is None:
+            # Nenhum arquivo compartilhado → tenta Excel local ou demo
+            with st.spinner("Carregando dados..."):
+                df_local, info_local = load_local_score()
+            st.session_state.df       = df_local
+            st.session_state.data_info = info_local
+            st.session_state.data_mtime = 0.0
 
     df = st.session_state.df
 
