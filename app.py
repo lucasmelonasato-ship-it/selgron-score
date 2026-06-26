@@ -271,7 +271,7 @@ def inject_sidebar_js():
 # ─── SESSION STATE ────────────────────────────────────────────────────────────
 
 def init_state():
-    for k, v in [("authenticated", False), ("df", None), ("data_info", "")]:
+    for k, v in [("authenticated", False), ("df", None), ("data_info", ""), ("page", "Painel Geral")]:
         if k not in st.session_state:
             st.session_state[k] = v
 
@@ -506,7 +506,22 @@ def page_login():
 
 # ─── SIDEBAR ─────────────────────────────────────────────────────────────────
 
-def show_sidebar(df: pd.DataFrame) -> str:
+PAGES_LIST = [
+    "🏠  Painel Geral",
+    "📊  Painel Comprador",
+    "🏭  Painel Fornecedor",
+    "⚠️  Acao Prioritaria",
+    "📤  Atualizar Base",
+]
+PAGES_KEYS = [
+    "Painel Geral",
+    "Painel Comprador",
+    "Painel Fornecedor",
+    "Acao Prioritaria",
+    "Atualizar Base",
+]
+
+def show_sidebar(df: pd.DataFrame):
     with st.sidebar:
         # Logo Selgron com ícone real
         st.markdown(f"""
@@ -521,13 +536,17 @@ def show_sidebar(df: pd.DataFrame) -> str:
             </div>
         </div>""", unsafe_allow_html=True)
 
-        page = st.radio("MENU", options=[
-            "🏠  Painel Geral",
-            "📊  Painel Comprador",
-            "🏭  Painel Fornecedor",
-            "⚠️  Acao Prioritaria",
-            "📤  Atualizar Base",
-        ], label_visibility="visible")
+        # Radio sincronizado com session_state.page
+        current_idx = PAGES_KEYS.index(st.session_state.page) if st.session_state.page in PAGES_KEYS else 0
+        selected = st.radio("MENU", options=PAGES_LIST,
+                            index=current_idx,
+                            label_visibility="visible")
+
+        # Sincroniza sessão
+        selected_key = PAGES_KEYS[PAGES_LIST.index(selected)]
+        if selected_key != st.session_state.page:
+            st.session_state.page = selected_key
+            st.rerun()
 
         st.markdown("---")
 
@@ -560,7 +579,41 @@ def show_sidebar(df: pd.DataFrame) -> str:
                 {st.session_state.data_info}
             </div>""", unsafe_allow_html=True)
 
-    return page.strip()
+
+def show_top_nav():
+    """Barra de navegação SEMPRE visível no topo — funciona com sidebar aberto ou fechado."""
+    current = st.session_state.page
+    labels  = ["🏠 Geral", "📊 Comprador", "🏭 Fornecedor", "⚠️ Prioritário", "📤 Base"]
+
+    st.markdown(f"""
+    <style>
+    /* Estilo dos botões do nav bar */
+    div[data-testid="stHorizontalBlock"] .stButton button {{
+        border-radius: 6px !important;
+        font-size: 0.78rem !important;
+        font-weight: 600 !important;
+        padding: 6px 4px !important;
+        border: 1px solid rgba(30,39,97,0.2) !important;
+        transition: all 0.15s !important;
+    }}
+    </style>
+    <div style="background:{NAVY};padding:8px 14px 4px 14px;border-radius:10px;
+                margin-bottom:14px;display:flex;align-items:center;gap:8px;">
+        <img src="data:image/png;base64,{LOGO_ICON_B64}"
+             style="width:28px;height:28px;object-fit:cover;border-radius:4px;flex-shrink:0;">
+        <span style="color:{GOLD};font-weight:800;font-size:1rem;letter-spacing:-0.5px;
+                     margin-right:6px;flex-shrink:0;">selgron</span>
+    </div>""", unsafe_allow_html=True)
+
+    cols = st.columns(5, gap="small")
+    for col, label, key in zip(cols, labels, PAGES_KEYS):
+        with col:
+            is_active = (current == key)
+            btn_style = "primary" if is_active else "secondary"
+            if st.button(label, use_container_width=True,
+                         type=btn_style, key=f"tnav_{key}"):
+                st.session_state.page = key
+                st.rerun()
 
 # ─── PAINEL GERAL ────────────────────────────────────────────────────────────
 
@@ -1084,27 +1137,29 @@ def main():
         st.session_state.df = df
         st.session_state.data_info = info
 
-    # Injeta JS para botão de expandir menu — roda em toda navegação
-    inject_sidebar_js()
+    df = st.session_state.df
 
-    df   = st.session_state.df
-    page = show_sidebar(df)
-    key  = page.split("  ", 1)[-1].strip()
+    # Sidebar (complementar — stats + radio sincronizado)
+    show_sidebar(df)
+
+    # ── Nav bar no TOPO — sempre visível, sidebar aberto ou fechado ──
+    show_top_nav()
 
     # Banner de dados de demonstração
     if "DEMO" in st.session_state.data_info:
         st.warning(
-            "⚠️ **Dados de demonstração** — Os nomes de fornecedores exibidos são placeholders gerados automaticamente. "
-            "Para ver os dados reais da Selgron, vá em **📤 Atualizar Base** e importe o arquivo "
-            "`Score_Fornecedores_Selgron_v7.xlsx`.",
+            "⚠️ **Dados de demonstração** — Os nomes de fornecedores são placeholders. "
+            "Vá em **📤 Base** e importe `Score_Fornecedores_Selgron_v7.xlsx` para ver os dados reais.",
             icon=None
         )
 
-    if   "Painel Geral"      in key: page_dashboard(df)
-    elif "Painel Comprador"  in key: page_por_comprador(df)
-    elif "Painel Fornecedor" in key: page_ficha(df)
-    elif "Acao"              in key: page_acao(df)
-    elif "Atualizar"         in key: page_atualizar(df)
+    # Roteamento pela session_state.page
+    key = st.session_state.page
+    if   key == "Painel Geral":      page_dashboard(df)
+    elif key == "Painel Comprador":  page_por_comprador(df)
+    elif key == "Painel Fornecedor": page_ficha(df)
+    elif key == "Acao Prioritaria":  page_acao(df)
+    elif key == "Atualizar Base":    page_atualizar(df)
 
 if __name__ == "__main__":
     main()
