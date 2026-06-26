@@ -279,25 +279,25 @@ def init_state():
 
 def _sample_data() -> pd.DataFrame:
     rng = np.random.default_rng(42)
-    # Compradores reais da Selgron (ajuste 3: Misael e Alex no lugar de Isabela e Lara)
+    # Compradores e volumes reais da Selgron (dados de demonstração)
     buyers_cfg = [
-        ("Edson Carlos Borges",               45, 0.91, 0.83),
-        ("Arthur da Silva",                    38, 0.85, 0.78),
-        ("Tatiana Goncalves",                  32, 0.82, 0.75),
-        ("Jair Wermuth",                       40, 0.58, 0.69),
-        ("Nithael Alexandre Krepsky Silveira", 35, 0.76, 0.71),
-        ("Misael Souza",                       30, 0.79, 0.73),
-        ("Alex Rodrigues",                     33, 0.84, 0.77),
+        ("Edson Carlos Borges",               52, 0.88, 0.94),
+        ("Arthur Gabriel Dero",               22, 0.85, 0.94),
+        ("Tatiana Carvalho de Souza",         111, 0.84, 0.96),
+        ("Misael Severino",                   51, 0.84, 0.98),
+        ("Alex Sandro Jung",                  14, 0.83, 0.95),
+        ("Nithael Alexandre Krepsky Silveira", 15, 0.78, 0.98),
+        ("Jair Wermuth",                      29, 0.62, 0.96),
     ]
     rows = []
     for buyer, n, p_mean, q_mean in buyers_cfg:
         for i in range(n):
             prazo = float(np.clip(rng.normal(p_mean, 0.11), 0.05, 1.0))
-            qual  = float(np.clip(rng.normal(q_mean, 0.09), 0.05, 1.0))
+            qual  = float(np.clip(rng.normal(q_mean, 0.05), 0.05, 1.0))
             geral = prazo * PESO_PRAZO + qual * PESO_QUAL
             total = max(1, int(rng.exponential(8)))
             ncs   = max(0, int(total * (1 - qual)))
-            fname = f"{buyer.split()[0][:4].upper()}-FORN-{i+1:03d} COM LTDA"
+            fname = f"[DEMO] FORNECEDOR {buyer.split()[0].upper()} {i+1:03d}"
             rows.append({
                 "FORNECEDOR":       fname,
                 "COMPRADOR":        buyer,
@@ -307,6 +307,8 @@ def _sample_data() -> pd.DataFrame:
                 "TOTAL_ENTREGAS":   total,
                 "ENTREGA_NO_PRAZO": max(0, total - int(total * (1 - prazo))),
                 "TOTAL_NCS":        ncs,
+                "VALOR_NF":         0,
+                "DIAGNOSTICO":      "",
             })
     df = pd.DataFrame(rows)
     df["CLASSE"] = df["SCORE_GERAL"].apply(get_class)
@@ -368,38 +370,88 @@ def _process_raw_prazo(file) -> pd.DataFrame:
 
 # ─── LOAD ────────────────────────────────────────────────────────────────────
 
+def _normalise_base_dados(df: pd.DataFrame) -> pd.DataFrame:
+    """Normaliza a aba BASE_DADOS do arquivo Score_Fornecedores_Selgron_v*.xlsx"""
+    rename = {
+        "NO_PRAZO":      "ENTREGA_NO_PRAZO",
+        "TOTAL_ALERTAS": "TOTAL_NCS",
+    }
+    df = df.rename(columns=rename)
+
+    for col in ["ENTREGA_NO_PRAZO", "TOTAL_NCS", "TOTAL_ENTREGAS", "VALOR_NF"]:
+        if col not in df.columns:
+            df[col] = 0
+
+    if "CLASSE" in df.columns:
+        df["CLASSE"] = df["CLASSE"].apply(normalise_class)
+    elif "SCORE_GERAL" in df.columns:
+        df["CLASSE"] = df["SCORE_GERAL"].apply(get_class)
+
+    df = df.sort_values("SCORE_GERAL", ascending=False).reset_index(drop=True)
+    df["RANK"] = range(1, len(df) + 1)
+    return df
+
+
 @st.cache_data(show_spinner=False)
 def load_local_score():
-    for path in ["Score_Fornecedores_Selgron_v8.xlsx","Score_Fornecedores_Selgron_v7.xlsx",
-                 "Score_Fornecedores_Selgron.xlsx","score_data.xlsx"]:
+    for path in ["Score_Fornecedores_Selgron_v8.xlsx", "Score_Fornecedores_Selgron_v7.xlsx",
+                 "Score_Fornecedores_Selgron.xlsx", "score_data.xlsx"]:
         if os.path.exists(path):
             try:
                 xls = pd.ExcelFile(path)
-                sheet = next((s for s in xls.sheet_names
-                              if "SCORE" in s.upper() and "GERAL" in s.upper()), xls.sheet_names[0])
-                df = pd.read_excel(path, sheet_name=sheet)
-                df = _normalise(df)
-                return df, f"{path} | aba '{sheet}' | {len(df)} fornecedores"
-            except: pass
+                # Prioridade: BASE_DADOS (estrutura limpa e completa)
+                if "BASE_DADOS" in xls.sheet_names:
+                    df = pd.read_excel(path, sheet_name="BASE_DADOS")
+                    df = _normalise_base_dados(df)
+                    return df, f"{path} | BASE_DADOS | {len(df)} fornecedores"
+                # Fallback: busca aba com "SCORE" e "GERAL" no nome
+                score_sheet = next((s for s in xls.sheet_names
+                                    if "SCORE" in s.upper() and "GERAL" in s.upper()), None)
+                if score_sheet:
+                    df = pd.read_excel(path, sheet_name=score_sheet)
+                    df = _normalise(df)
+                    return df, f"{path} | '{score_sheet}' | {len(df)} fornecedores"
+            except Exception:
+                pass
     return _sample_data(), "DEMO — coloque Score_Fornecedores_Selgron_v7.xlsx na pasta do app ou importe em 'Atualizar Base'"
+
 
 def load_from_upload(uploaded):
     try:
         xls = pd.ExcelFile(uploaded)
+
+        # 1. Prioridade máxima: BASE_DADOS (estrutura limpa)
+        if "BASE_DADOS" in xls.sheet_names:
+            df = pd.read_excel(uploaded, sheet_name="BASE_DADOS")
+            df = _normalise_base_dados(df)
+            return df, f"BASE_DADOS | {len(df)} fornecedores carregados"
+
+        # 2. Planilha com aba SCORE GERAL genérica (header pode estar na linha 2)
         score_sheet = next((s for s in xls.sheet_names
                             if "SCORE" in s.upper() and "GERAL" in s.upper()), None)
         if score_sheet:
+            # Tenta header na linha 0
             df = pd.read_excel(uploaded, sheet_name=score_sheet)
+            # Se primeira coluna parecer um título, tenta header=2
+            first_col = str(df.columns[0])
+            if len(first_col) > 30 or "SELGRON" in first_col.upper() or "SCORE" in first_col.upper():
+                df = pd.read_excel(uploaded, sheet_name=score_sheet, header=2)
             df = _normalise(df)
-            return df, f"Aba '{score_sheet}' | {len(df)} fornecedores carregados"
+            if "FORNECEDOR" in df.columns and len(df) > 0:
+                return df, f"'{score_sheet}' | {len(df)} fornecedores carregados"
+
+        # 3. Dados brutos de prazo (aba BASE)
         if "BASE" in xls.sheet_names:
             df = _process_raw_prazo(uploaded)
             return df, f"Dados brutos processados | {len(df)} fornecedores"
+
+        # 4. Última tentativa: primeira aba
         df = pd.read_excel(uploaded, sheet_name=0)
         df = _normalise(df)
-        return df, f"Primeira aba | {len(df)} registros"
+        return df, f"Primeira aba | {len(df)} registros importados"
+
     except Exception as e:
-        return _sample_data(), f"Erro: {e}"
+        return _sample_data(), f"Erro ao processar arquivo: {e}"
 
 # ─── RANKING TABLE (HTML colorida) ───────────────────────────────────────────
 
@@ -1094,7 +1146,12 @@ def page_atualizar(df: pd.DataFrame):
         if uploaded:
             with st.spinner("Processando..."):
                 df_new, msg = load_from_upload(uploaded)
-            st.success(msg) if not msg.startswith("Erro") else st.error(msg)
+
+            if msg.startswith("Erro"):
+                st.error(msg)
+            else:
+                st.success(msg)
+
             st.markdown(f"**{len(df_new)} fornecedores | {df_new['COMPRADOR'].nunique()} compradores**")
             prev = df_new.head(8).copy()
             for c in ["SCORE_GERAL","SCORE_PRAZO","SCORE_QUALIDADE"]:
@@ -1149,8 +1206,7 @@ def main():
     if "DEMO" in st.session_state.data_info:
         st.warning(
             "⚠️ **Dados de demonstração** — Os nomes de fornecedores são placeholders. "
-            "Vá em **📤 Base** e importe `Score_Fornecedores_Selgron_v7.xlsx` para ver os dados reais.",
-            icon=None
+            "Vá em **📤 Base** e importe `Score_Fornecedores_Selgron_v7.xlsx` para ver os dados reais."
         )
 
     # Roteamento pela session_state.page
