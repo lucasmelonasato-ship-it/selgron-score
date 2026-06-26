@@ -637,7 +637,7 @@ def show_top_nav():
     current = st.session_state.page
     labels  = ["🏠 Geral", "📊 Comprador", "🏭 Fornecedor", "⚠️ Prioritário", "📤 Base"]
 
-    st.markdown(f"""
+    st.html(f"""
     <style>
     /* Estilo dos botões do nav bar */
     div[data-testid="stHorizontalBlock"] .stButton button {{
@@ -670,9 +670,8 @@ def show_top_nav():
 # ─── PAINEL GERAL ────────────────────────────────────────────────────────────
 
 def page_dashboard(df: pd.DataFrame):
-    st.markdown(logo_header("Painel Geral de Fornecedores",
-                            f"Performance consolidada · {datetime.now().strftime('%B %Y')}"),
-                unsafe_allow_html=True)
+    st.html(logo_header("Painel Geral de Fornecedores",
+                         f"Performance consolidada · {datetime.now().strftime('%B %Y')}"))
 
     avg  = df["SCORE_GERAL"].mean()
     avgP = df["SCORE_PRAZO"].mean()
@@ -736,7 +735,7 @@ def page_dashboard(df: pd.DataFrame):
     df_show = df_filt.head(n_show)
 
     st.caption(f"Exibindo {len(df_show)} de {len(df_filt)} fornecedores filtrados")
-    st.markdown(ranking_table_html(df_show), unsafe_allow_html=True)
+    st.html(ranking_table_html(df_show))
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.download_button("⬇️ Exportar base filtrada (.csv)",
@@ -746,9 +745,8 @@ def page_dashboard(df: pd.DataFrame):
 # ─── PAINEL COMPRADOR ────────────────────────────────────────────────────────
 
 def page_por_comprador(df: pd.DataFrame):
-    st.markdown(logo_header("Painel Comprador",
-                            "Visao individual da carteira de fornecedores"),
-                unsafe_allow_html=True)
+    st.html(logo_header("Painel Comprador",
+                            "Visao individual da carteira de fornecedores"))
 
     buyers = sorted(df["COMPRADOR"].unique())
     sel = st.selectbox("Selecione o Comprador", buyers, key="comp_sel")
@@ -825,7 +823,7 @@ def page_por_comprador(df: pd.DataFrame):
         df_filt = df_filt[df_filt["CLASSE"] == cls_f]
 
     st.caption(f"{len(df_filt)} fornecedores")
-    st.markdown(ranking_table_html(df_filt), unsafe_allow_html=True)
+    st.html(ranking_table_html(df_filt))
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.download_button(f"⬇️ Exportar carteira de {sel.split()[0]}",
@@ -835,9 +833,8 @@ def page_por_comprador(df: pd.DataFrame):
 # ─── PAINEL FORNECEDOR ───────────────────────────────────────────────────────
 
 def page_ficha(df: pd.DataFrame):
-    st.markdown(logo_header("Painel Fornecedor",
-                            "Performance individual · Otimizado para impressao e PDF"),
-                unsafe_allow_html=True)
+    st.html(logo_header("Painel Fornecedor",
+                            "Performance individual · Otimizado para impressao e PDF"))
 
     fc1, fc2, _ = st.columns([1.1, 1.1, 1.8])
     with fc1:
@@ -909,7 +906,7 @@ def page_ficha(df: pd.DataFrame):
         <span style="font-size:0.75rem;color:#888;margin-left:12px;">Ctrl+P → Salvar como PDF</span>
     </div>""", unsafe_allow_html=True)
 
-    st.markdown(f"""
+    st.html(f"""
     <div class="ficha-wrap">
         <div style="background:{NAVY};padding:16px 20px;border-radius:8px;margin-bottom:18px;
                     display:flex;justify-content:space-between;align-items:flex-start;">
@@ -1010,14 +1007,13 @@ def page_ficha(df: pd.DataFrame):
             Selgron Industrial · Suprimentos · Gerado em {today} ·
             Metodologia: 60% Prazo + 40% Qualidade
         </div>
-    </div>""", unsafe_allow_html=True)
+    </div>""")
 
 # ─── ACAO PRIORITARIA ────────────────────────────────────────────────────────
 
 def page_acao(df: pd.DataFrame):
-    st.markdown(logo_header("Acao Prioritaria",
-                            "Fornecedores Classe D e E · Intervencao necessaria"),
-                unsafe_allow_html=True)
+    st.html(logo_header("Acao Prioritaria",
+                            "Fornecedores Classe D e E · Intervencao necessaria"))
 
     df_e = df[df["CLASSE"].str.startswith("E")].copy()
     df_d = df[df["CLASSE"].str.startswith("D")].copy()
@@ -1088,7 +1084,7 @@ def page_acao(df: pd.DataFrame):
                 st.dataframe(worst, use_container_width=True, hide_index=True)
 
             st.markdown('<div class="sec-title">Lista Completa</div>', unsafe_allow_html=True)
-            st.markdown(ranking_table_html(dfs), unsafe_allow_html=True)
+            st.html(ranking_table_html(dfs))
             st.markdown("<br>", unsafe_allow_html=True)
             st.download_button(f"⬇️ Exportar Classe {tag}",
                                dfs.to_csv(index=False).encode("utf-8"),
@@ -1097,9 +1093,8 @@ def page_acao(df: pd.DataFrame):
 # ─── ATUALIZAR BASE ──────────────────────────────────────────────────────────
 
 def page_atualizar(df: pd.DataFrame):
-    st.markdown(logo_header("Atualizar Base de Dados",
-                            "Importar dados de novos meses (julho, agosto...)"),
-                unsafe_allow_html=True)
+    st.html(logo_header("Atualizar Base de Dados",
+                        "Importar dados de novos meses (julho, agosto...)"))
 
     left, right = st.columns([1, 1])
 
