@@ -268,12 +268,72 @@ def inject_sidebar_js():
     </script>
     """, height=0, scrolling=False)
 
-# ─── PERSISTÊNCIA COMPARTILHADA (dados visíveis para todos os usuários) ──────
-# Quando alguém importa uma planilha, os dados são salvos neste arquivo.
-# Todos os outros usuários carregam automaticamente na próxima interação.
+# ─── SNAPSHOTS MENSAIS (pasta /dados no repositório GitHub) ──────────────────
+# PERSISTÊNCIA REAL: cada mês é um arquivo .xlsx dentro da pasta 'dados/' do
+# repositório. Como o Streamlit Cloud reimplanta o repo a cada reinício, esses
+# arquivos NUNCA são perdidos. Para adicionar um mês, basta enviar o arquivo
+# para a pasta 'dados/' no GitHub, nomeado como AAAA-MM.xlsx (ex: 2026-05.xlsx).
 
-DATA_FILE      = "selgron_data.parquet"   # dados principais (parquet = rápido)
-DATA_INFO_FILE = "selgron_data_info.txt"  # texto informativo da importação
+DADOS_DIR = "dados"
+
+MESES_PT = {
+    1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril", 5: "Maio", 6: "Junho",
+    7: "Julho", 8: "Agosto", 9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro",
+}
+
+def _parse_month_from_filename(fname: str):
+    """Extrai (ano, mes, label) de um nome tipo '2026-05.xlsx' ou '2026-05_maio.xlsx'."""
+    import re
+    base = os.path.basename(fname)
+    m = re.match(r"(\d{4})[-_](\d{1,2})", base)
+    if m:
+        ano, mes = int(m.group(1)), int(m.group(2))
+        label = f"{MESES_PT.get(mes, mes)}/{ano}"
+        return ano, mes, label
+    # Sem padrão de data → usa o nome do arquivo como label
+    return 0, 0, base.replace(".xlsx", "").replace(".parquet", "")
+
+@st.cache_data(show_spinner=False)
+def load_all_snapshots():
+    """
+    Lê TODOS os arquivos da pasta 'dados/' e retorna uma lista ordenada
+    cronologicamente: [(label, ano, mes, df), ...].
+    Cada arquivo = um fechamento mensal (snapshot).
+    """
+    snapshots = []
+    if os.path.isdir(DADOS_DIR):
+        files = [f for f in os.listdir(DADOS_DIR)
+                 if f.lower().endswith((".xlsx", ".xls", ".parquet"))]
+        for fname in files:
+            path = os.path.join(DADOS_DIR, fname)
+            try:
+                if fname.lower().endswith(".parquet"):
+                    df = pd.read_parquet(path)
+                    df = _normalise_base_dados(df) if "SCORE_GERAL" in df.columns else _normalise(df)
+                else:
+                    xls = pd.ExcelFile(path)
+                    if "BASE_DADOS" in xls.sheet_names:
+                        df = pd.read_excel(path, sheet_name="BASE_DADOS")
+                        df = _normalise_base_dados(df)
+                    else:
+                        sheet = next((s for s in xls.sheet_names
+                                      if "SCORE" in s.upper() and "GERAL" in s.upper()),
+                                     xls.sheet_names[0])
+                        df = pd.read_excel(path, sheet_name=sheet)
+                        df = _normalise(df)
+                ano, mes, label = _parse_month_from_filename(fname)
+                snapshots.append((label, ano, mes, df))
+            except Exception:
+                pass
+    # Ordena cronologicamente (mais antigo → mais novo)
+    snapshots.sort(key=lambda x: (x[1], x[2]))
+    return snapshots
+
+# ─── PERSISTÊNCIA EM SESSÃO (upload temporário / preview) ────────────────────
+# Mantido para preview rápido dentro de uma sessão. NÃO persiste entre reinícios.
+
+DATA_FILE      = "selgron_data.parquet"
+DATA_INFO_FILE = "selgron_data_info.txt"
 
 def save_shared_data(df: pd.DataFrame, info: str) -> bool:
     """Salva os dados no disco — compartilhado entre TODOS os usuários."""
@@ -311,7 +371,8 @@ def load_shared_data():
 
 def init_state():
     for k, v in [("authenticated", False), ("df", None), ("data_info", ""),
-                 ("page", "Painel Geral"), ("data_mtime", 0.0)]:
+                 ("page", "Painel Geral"), ("data_mtime", 0.0),
+                 ("sel_month", None), ("prev_df", None), ("month_label", "")]:
         if k not in st.session_state:
             st.session_state[k] = v
 
@@ -873,8 +934,10 @@ def page_por_comprador(df: pd.DataFrame):
 # ─── PAINEL FORNECEDOR ───────────────────────────────────────────────────────
 
 def page_ficha(df: pd.DataFrame):
+    import streamlit.components.v1 as components
+
     st.html(logo_header("Painel Fornecedor",
-                            "Performance individual · Otimizado para impressao e PDF"))
+                        "Performance individual · Exportável como imagem para e-mail/chat"))
 
     fc1, fc2, _ = st.columns([1.1, 1.1, 1.8])
     with fc1:
@@ -883,171 +946,207 @@ def page_ficha(df: pd.DataFrame):
         dfb = df[df["COMPRADOR"] == sel_buyer]
         sel_sup = st.selectbox("Fornecedor", sorted(dfb["FORNECEDOR"].unique()), key="fich_sup")
 
-    if not sel_sup: return
+    if not sel_sup:
+        return
 
     row   = dfb[dfb["FORNECEDOR"] == sel_sup].iloc[0]
-    cls   = row["CLASSE"]
+    cls   = normalise_class(row["CLASSE"])
     cc    = CLASSES.get(cls, CLASSES["E - CRITICO"])
     score = row["SCORE_GERAL"]
     prazo = row["SCORE_PRAZO"]
     qual  = row["SCORE_QUALIDADE"]
     today = datetime.now().strftime("%d/%m/%Y")
+    month_label = st.session_state.get("month_label", "Período atual")
 
+    # ── EVOLUÇÃO vs mês anterior ──
+    prev_df = st.session_state.get("prev_df")
+    evo_html = ""
+    if prev_df is not None:
+        prev_row = prev_df[prev_df["FORNECEDOR"] == sel_sup]
+        if len(prev_row) > 0:
+            prev_score = prev_row.iloc[0]["SCORE_GERAL"]
+            delta = (score - prev_score) * 100
+            if delta > 0.5:
+                arrow, dcolor, dword = "▲", BAR_GREEN, "melhorou"
+            elif delta < -0.5:
+                arrow, dcolor, dword = "▼", BAR_RED, "piorou"
+            else:
+                arrow, dcolor, dword = "▬", DGRAY, "estável"
+            evo_html = f"""
+            <div style="display:flex;gap:16px;margin-bottom:16px;">
+                <div style="flex:1;background:#FAFAFA;border:1px solid #E8E8E8;border-radius:8px;padding:14px;text-align:center;">
+                    <div style="font-size:0.6rem;color:{DGRAY};font-weight:700;text-transform:uppercase;letter-spacing:0.08em;">Mês Anterior</div>
+                    <div style="font-size:1.6rem;font-weight:800;color:{DGRAY};">{prev_score*100:.1f}%</div>
+                </div>
+                <div style="flex:1;background:#FAFAFA;border:1px solid #E8E8E8;border-radius:8px;padding:14px;text-align:center;">
+                    <div style="font-size:0.6rem;color:{DGRAY};font-weight:700;text-transform:uppercase;letter-spacing:0.08em;">Mês Atual</div>
+                    <div style="font-size:1.6rem;font-weight:800;color:{cc['text']};">{score*100:.1f}%</div>
+                </div>
+                <div style="flex:1.2;background:{dcolor}1A;border:1.5px solid {dcolor};border-radius:8px;padding:14px;text-align:center;">
+                    <div style="font-size:0.6rem;color:{dcolor};font-weight:700;text-transform:uppercase;letter-spacing:0.08em;">Evolução</div>
+                    <div style="font-size:1.6rem;font-weight:800;color:{dcolor};">{arrow} {abs(delta):.1f} pts</div>
+                    <div style="font-size:0.62rem;color:{dcolor};font-weight:600;">desempenho {dword}</div>
+                </div>
+            </div>"""
+        else:
+            evo_html = f"""
+            <div style="background:{BG_BLUE};border:1px solid {BAR_BLUE};border-radius:8px;padding:10px 16px;margin-bottom:16px;">
+                <span style="font-size:0.78rem;font-weight:600;color:{C_BLUE};">🆕 Fornecedor sem registro no mês anterior — primeiro fechamento monitorado.</span>
+            </div>"""
+
+    # ── Diagnóstico ──
     issues = []
     if prazo < 0.70:
         late = int(row["TOTAL_ENTREGAS"]) - int(row["ENTREGA_NO_PRAZO"])
-        issues.append(f"prazo de entrega abaixo do minimo ({pct(prazo)}) — {late} entregas atrasadas no periodo")
+        issues.append(f"prazo de entrega abaixo do mínimo ({pct(prazo)}) — {late} entregas atrasadas no período")
     if qual < 0.70:
-        issues.append(f"qualidade abaixo do minimo ({pct(qual)}) — {int(row['TOTAL_NCS'])} nao conformidades registradas")
-
+        issues.append(f"qualidade abaixo do mínimo ({pct(qual)}) — {int(row['TOTAL_NCS'])} não conformidades registradas")
     if issues:
         bullets = "".join(f"<li>{i}</li>" for i in issues)
-        diag = f"""
-        <div style="background:#FFF3CD;border:1px solid #FFC107;border-radius:8px;
-                    padding:12px 16px;margin-bottom:16px;">
-            <div style="font-size:0.75rem;font-weight:700;color:#856404;margin-bottom:6px;">
-                ⚠️ Pontos de Atencao Identificados
-            </div>
-            <ul style="font-size:0.8rem;color:#6d5402;margin:0;padding-left:18px;line-height:1.8;">
-                {bullets}
-            </ul>
-        </div>"""
+        diag = f'<div style="background:#FFF3CD;border:1px solid #FFC107;border-radius:8px;padding:12px 16px;margin-bottom:16px;"><div style="font-size:0.75rem;font-weight:700;color:#856404;margin-bottom:6px;">⚠️ Pontos de Atenção Identificados</div><ul style="font-size:0.8rem;color:#6d5402;margin:0;padding-left:18px;line-height:1.8;">{bullets}</ul></div>'
     else:
-        diag = f"""
-        <div style="background:{BG_GREEN};border:1px solid {BAR_GREEN};border-radius:8px;
-                    padding:10px 16px;margin-bottom:16px;">
-            <div style="font-size:0.78rem;font-weight:700;color:{C_GREEN};">
-                ✅ Fornecedor dentro dos parametros esperados.
-            </div>
-        </div>"""
+        diag = f'<div style="background:{BG_GREEN};border:1px solid {BAR_GREEN};border-radius:8px;padding:10px 16px;margin-bottom:16px;"><div style="font-size:0.78rem;font-weight:700;color:{C_GREEN};">✅ Fornecedor dentro dos parâmetros esperados.</div></div>'
 
+    # ── Escala de classes ──
     meta_rows = ""
     for cname, cdata in CLASSES.items():
         hl  = "font-weight:700;" if cname == cls else ""
         bg  = cdata["bg"] if cname == cls else "white"
         rng = (">= 90%" if cname.startswith("A") else "80 - 89%" if cname.startswith("B")
                else "70 - 79%" if cname.startswith("C") else "60 - 69%" if cname.startswith("D") else "< 60%")
-        atual = "← ATUAL" if cname == cls else ""
-        meta_rows += f"""
-        <tr style="background:{bg};{hl}">
-            <td style="padding:5px 14px;color:{cdata['text']};">{cdata['emoji']} {cname}</td>
-            <td style="padding:5px 14px;text-align:center;color:{DGRAY};">{rng}</td>
-            <td style="padding:5px 14px;text-align:center;font-weight:700;color:{cdata['text']};">{atual}</td>
-        </tr>"""
+        atual = "&larr; ATUAL" if cname == cls else ""
+        meta_rows += f'<tr style="background:{bg};{hl}"><td style="padding:5px 14px;color:{cdata["text"]};">{cdata["emoji"]} {cname}</td><td style="padding:5px 14px;text-align:center;color:{DGRAY};">{rng}</td><td style="padding:5px 14px;text-align:center;font-weight:700;color:{cdata["text"]};">{atual}</td></tr>'
 
-    st.html("""
-    <div class="no-print" style="margin-bottom:14px;">
-        <button onclick="window.print()" style="
-            background:#1E2761;color:white;border:none;padding:8px 22px;
-            border-radius:6px;cursor:pointer;font-size:0.85rem;font-weight:600;
-            font-family:Inter,sans-serif;">
-            🖨️ Imprimir / Salvar PDF
-        </button>
-        <span style="font-size:0.75rem;color:#888;margin-left:12px;">Ctrl+P → Salvar como PDF</span>
-    </div>""")
+    def bar(v, color):
+        return f'<div style="background:#E8E8E8;border-radius:4px;height:9px;margin:3px 0 10px 0;"><div style="background:{color};width:{min(v*100,100):.1f}%;height:9px;border-radius:4px;"></div></div>'
 
-    st.html(f"""
-    <div class="ficha-wrap">
-        <div style="background:{NAVY};padding:16px 20px;border-radius:8px;margin-bottom:18px;
-                    display:flex;justify-content:space-between;align-items:flex-start;">
-            <div>
-                <div style="font-size:0.62rem;color:rgba(255,255,255,0.5);text-transform:uppercase;
-                            letter-spacing:0.12em;">Selgron Industrial · Suprimentos</div>
-                <div style="font-size:1.25rem;font-weight:700;color:{WHITE};margin:4px 0;">
-                    Ficha de Performance de Fornecedor
-                </div>
-                <div style="font-size:0.78rem;color:{GOLD};">Comprador: {sel_buyer}</div>
-            </div>
-            <div style="text-align:right;display:flex;align-items:center;gap:10px;">
-                <img src="data:image/png;base64,{LOGO_ICON_B64}"
-                     style="width:42px;height:42px;object-fit:cover;border-radius:6px;">
+    nc_color = C_RED if row['TOTAL_NCS'] > 0 else BAR_GREEN
+
+    # ════════════════════════════════════════════════════════════════════
+    #  FICHA AUTOCONTIDA (HTML + html2canvas) — exportável como IMAGEM
+    # ════════════════════════════════════════════════════════════════════
+    ficha_html = f"""
+    <!DOCTYPE html><html><head><meta charset="utf-8">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <style>
+        * {{ box-sizing:border-box; margin:0; padding:0; font-family:'Segoe UI',Arial,sans-serif; }}
+        body {{ background:#F4F5F9; padding:8px; }}
+        .toolbar {{ display:flex; gap:10px; margin-bottom:14px; align-items:center; }}
+        .btn {{ border:none; border-radius:6px; padding:9px 18px; cursor:pointer;
+                font-size:0.85rem; font-weight:600; transition:all 0.15s; }}
+        .btn-primary {{ background:{NAVY}; color:#fff; }}
+        .btn-primary:hover {{ background:{GOLD}; color:{NAVY}; }}
+        .btn-gold {{ background:{GOLD}; color:{NAVY}; }}
+        .btn-gold:hover {{ background:{NAVY}; color:#fff; }}
+        .hint {{ font-size:0.72rem; color:#888; }}
+        #ficha {{ background:#fff; border:1px solid #DDD; border-radius:10px;
+                  padding:26px 30px; max-width:720px; box-shadow:0 4px 20px rgba(30,39,97,0.1); }}
+    </style></head>
+    <body>
+        <div class="toolbar">
+            <button class="btn btn-gold" onclick="copiarImagem()">📋 Copiar imagem</button>
+            <button class="btn btn-primary" onclick="baixarImagem()">💾 Baixar PNG</button>
+            <span class="hint" id="status">Copie e cole direto no e-mail ou WhatsApp</span>
+        </div>
+
+        <div id="ficha">
+            <div style="background:{NAVY};padding:16px 20px;border-radius:8px;margin-bottom:16px;
+                        display:flex;justify-content:space-between;align-items:flex-start;">
                 <div>
-                    <div style="font-size:1.5rem;font-weight:800;color:{GOLD};letter-spacing:-1px;">selgron</div>
-                    <div style="font-size:0.62rem;color:rgba(255,255,255,0.4);">{today}</div>
+                    <div style="font-size:0.6rem;color:rgba(255,255,255,0.5);text-transform:uppercase;letter-spacing:0.12em;">Selgron Industrial · Suprimentos</div>
+                    <div style="font-size:1.25rem;font-weight:700;color:#fff;margin:4px 0;">Ficha de Performance de Fornecedor</div>
+                    <div style="font-size:0.78rem;color:{GOLD};">Comprador: {sel_buyer} &nbsp;·&nbsp; Referência: {month_label}</div>
                 </div>
-            </div>
-        </div>
-
-        <div style="background:{cc['bg']};border-radius:8px;padding:12px 18px;
-                    margin-bottom:16px;border-left:4px solid {cc['bar']};">
-            <div style="font-size:0.62rem;color:{DGRAY};font-weight:700;text-transform:uppercase;">Fornecedor</div>
-            <div style="font-size:1.25rem;font-weight:700;color:{cc['text']};margin:3px 0;">{sel_sup}</div>
-        </div>
-
-        <div style="display:flex;gap:16px;margin-bottom:16px;">
-            <div style="flex:1;background:{cc['bg']};border-radius:8px;padding:18px;
-                        text-align:center;border:2px solid {cc['bar']};">
-                <div style="font-size:0.62rem;color:{DGRAY};font-weight:700;text-transform:uppercase;
-                            letter-spacing:0.09em;margin-bottom:6px;">Score Geral</div>
-                <div style="font-size:3.4rem;font-weight:800;color:{cc['text']};line-height:1;">
-                    {score*100:.1f}<span style="font-size:1.6rem;">%</span>
-                </div>
-                <div style="font-size:0.88rem;font-weight:700;color:{cc['text']};margin-top:6px;">{cls}</div>
-                <div style="font-size:0.7rem;color:{DGRAY};margin-top:4px;">
-                    Ranking #{int(row['RANK'])} de {len(df)} fornecedores
-                </div>
-            </div>
-            <div style="flex:2;background:#FAFAFA;border-radius:8px;padding:16px;border:1px solid #E8E8E8;">
-                <div style="font-size:0.62rem;color:{DGRAY};font-weight:700;text-transform:uppercase;
-                            letter-spacing:0.09em;margin-bottom:10px;">Detalhamento</div>
-                <div style="display:flex;justify-content:space-between;margin-bottom:2px;">
-                    <span style="font-size:0.8rem;font-weight:600;color:#333;">
-                        🚚 Prazo de Entrega <span style="color:{DGRAY};font-weight:400;">(peso 60%)</span>
-                    </span>
-                    <span style="font-size:0.85rem;font-weight:700;color:{score_bar_color(prazo)};">{pct(prazo)}</span>
-                </div>
-                {progress_bar(prazo, score_bar_color(prazo))}
-                <div style="display:flex;justify-content:space-between;margin-bottom:2px;">
-                    <span style="font-size:0.8rem;font-weight:600;color:#333;">
-                        ✅ Qualidade <span style="color:{DGRAY};font-weight:400;">(peso 40%)</span>
-                    </span>
-                    <span style="font-size:0.85rem;font-weight:700;color:{score_bar_color(qual)};">{pct(qual)}</span>
-                </div>
-                {progress_bar(qual, score_bar_color(qual))}
-                <div style="border-top:1px solid #E8E8E8;margin-top:8px;padding-top:10px;display:flex;gap:24px;">
+                <div style="text-align:right;display:flex;align-items:center;gap:8px;">
+                    <img src="data:image/png;base64,{LOGO_ICON_B64}" style="width:40px;height:40px;object-fit:cover;border-radius:6px;">
                     <div>
-                        <div style="font-size:0.62rem;color:{DGRAY};font-weight:700;text-transform:uppercase;">Total Entregas</div>
-                        <div style="font-size:1.15rem;font-weight:700;color:{NAVY};">{int(row['TOTAL_ENTREGAS'])}</div>
-                    </div>
-                    <div>
-                        <div style="font-size:0.62rem;color:{DGRAY};font-weight:700;text-transform:uppercase;">No Prazo</div>
-                        <div style="font-size:1.15rem;font-weight:700;color:{BAR_GREEN};">{int(row['ENTREGA_NO_PRAZO'])}</div>
-                    </div>
-                    <div>
-                        <div style="font-size:0.62rem;color:{DGRAY};font-weight:700;text-transform:uppercase;">Nao Conformidades</div>
-                        <div style="font-size:1.15rem;font-weight:700;color:{'#C00000' if row['TOTAL_NCS'] > 0 else BAR_GREEN};">{int(row['TOTAL_NCS'])}</div>
-                    </div>
-                    <div>
-                        <div style="font-size:0.62rem;color:{DGRAY};font-weight:700;text-transform:uppercase;">Periodo</div>
-                        <div style="font-size:1.15rem;font-weight:700;color:{NAVY};">Mai-Jun 2026</div>
+                        <div style="font-size:1.5rem;font-weight:800;color:{GOLD};letter-spacing:-1px;">selgron</div>
+                        <div style="font-size:0.6rem;color:rgba(255,255,255,0.4);">{today}</div>
                     </div>
                 </div>
             </div>
-        </div>
 
-        {diag}
-
-        <div style="border:1px solid #E8E8E8;border-radius:8px;overflow:hidden;margin-bottom:16px;">
-            <div style="background:{NAVY};color:white;padding:8px 14px;font-size:0.68rem;
-                        font-weight:700;text-transform:uppercase;letter-spacing:0.09em;">
-                Escala de Classificacao
+            <div style="background:{cc['bg']};border-radius:8px;padding:12px 18px;margin-bottom:16px;border-left:4px solid {cc['bar']};">
+                <div style="font-size:0.6rem;color:{DGRAY};font-weight:700;text-transform:uppercase;">Fornecedor</div>
+                <div style="font-size:1.25rem;font-weight:700;color:{cc['text']};margin:3px 0;">{sel_sup}</div>
             </div>
-            <table style="width:100%;border-collapse:collapse;font-size:0.8rem;">
-                <tr style="background:{LGRAY};">
-                    <th style="padding:6px 14px;text-align:left;color:{DGRAY};font-weight:600;">Classe</th>
-                    <th style="padding:6px 14px;text-align:center;color:{DGRAY};font-weight:600;">Score</th>
-                    <th style="padding:6px 14px;text-align:center;color:{DGRAY};font-weight:600;">Situacao</th>
-                </tr>
-                {meta_rows}
-            </table>
+
+            <div style="display:flex;gap:16px;margin-bottom:16px;">
+                <div style="flex:1;background:{cc['bg']};border-radius:8px;padding:18px;text-align:center;border:2px solid {cc['bar']};">
+                    <div style="font-size:0.6rem;color:{DGRAY};font-weight:700;text-transform:uppercase;letter-spacing:0.09em;margin-bottom:6px;">Score Geral</div>
+                    <div style="font-size:3.3rem;font-weight:800;color:{cc['text']};line-height:1;">{score*100:.1f}<span style="font-size:1.5rem;">%</span></div>
+                    <div style="font-size:0.86rem;font-weight:700;color:{cc['text']};margin-top:6px;">{cls}</div>
+                    <div style="font-size:0.68rem;color:{DGRAY};margin-top:4px;">Ranking #{int(row['RANK'])} de {len(df)} fornecedores</div>
+                </div>
+                <div style="flex:2;background:#FAFAFA;border-radius:8px;padding:16px;border:1px solid #E8E8E8;">
+                    <div style="font-size:0.6rem;color:{DGRAY};font-weight:700;text-transform:uppercase;letter-spacing:0.09em;margin-bottom:10px;">Detalhamento</div>
+                    <div style="display:flex;justify-content:space-between;margin-bottom:2px;">
+                        <span style="font-size:0.8rem;font-weight:600;color:#333;">🚚 Prazo de Entrega <span style="color:{DGRAY};font-weight:400;">(peso 60%)</span></span>
+                        <span style="font-size:0.85rem;font-weight:700;color:{score_bar_color(prazo)};">{pct(prazo)}</span>
+                    </div>
+                    {bar(prazo, score_bar_color(prazo))}
+                    <div style="display:flex;justify-content:space-between;margin-bottom:2px;">
+                        <span style="font-size:0.8rem;font-weight:600;color:#333;">✅ Qualidade <span style="color:{DGRAY};font-weight:400;">(peso 40%)</span></span>
+                        <span style="font-size:0.85rem;font-weight:700;color:{score_bar_color(qual)};">{pct(qual)}</span>
+                    </div>
+                    {bar(qual, score_bar_color(qual))}
+                    <div style="border-top:1px solid #E8E8E8;margin-top:8px;padding-top:10px;display:flex;gap:20px;">
+                        <div><div style="font-size:0.6rem;color:{DGRAY};font-weight:700;text-transform:uppercase;">Entregas</div><div style="font-size:1.1rem;font-weight:700;color:{NAVY};">{int(row['TOTAL_ENTREGAS'])}</div></div>
+                        <div><div style="font-size:0.6rem;color:{DGRAY};font-weight:700;text-transform:uppercase;">No Prazo</div><div style="font-size:1.1rem;font-weight:700;color:{BAR_GREEN};">{int(row['ENTREGA_NO_PRAZO'])}</div></div>
+                        <div><div style="font-size:0.6rem;color:{DGRAY};font-weight:700;text-transform:uppercase;">Não Conf.</div><div style="font-size:1.1rem;font-weight:700;color:{nc_color};">{int(row['TOTAL_NCS'])}</div></div>
+                    </div>
+                </div>
+            </div>
+
+            {evo_html}
+            {diag}
+
+            <div style="border:1px solid #E8E8E8;border-radius:8px;overflow:hidden;margin-bottom:14px;">
+                <div style="background:{NAVY};color:#fff;padding:8px 14px;font-size:0.66rem;font-weight:700;text-transform:uppercase;letter-spacing:0.09em;">Escala de Classificação</div>
+                <table style="width:100%;border-collapse:collapse;font-size:0.78rem;">
+                    <tr style="background:{LGRAY};"><th style="padding:6px 14px;text-align:left;color:{DGRAY};font-weight:600;">Classe</th><th style="padding:6px 14px;text-align:center;color:{DGRAY};font-weight:600;">Score</th><th style="padding:6px 14px;text-align:center;color:{DGRAY};font-weight:600;">Situação</th></tr>
+                    {meta_rows}
+                </table>
+            </div>
+
+            <div style="background:{NAVY};color:rgba(255,255,255,0.65);padding:8px 14px;border-radius:6px;font-size:0.62rem;text-align:center;">
+                Selgron Industrial · Suprimentos · {month_label} · Gerado em {today} · Metodologia: 60% Prazo + 40% Qualidade
+            </div>
         </div>
 
-        <div style="background:{NAVY};color:rgba(255,255,255,0.65);padding:8px 14px;
-                    border-radius:6px;font-size:0.63rem;text-align:center;">
-            Selgron Industrial · Suprimentos · Gerado em {today} ·
-            Metodologia: 60% Prazo + 40% Qualidade
-        </div>
-    </div>""")
+        <script>
+        function render(cb) {{
+            html2canvas(document.getElementById('ficha'),
+                {{scale:2, backgroundColor:'#ffffff', useCORS:true}}).then(cb);
+        }}
+        function baixarImagem() {{
+            render(function(canvas) {{
+                var link = document.createElement('a');
+                link.download = 'Ficha_{sel_sup.split()[0]}_{month_label.replace("/","-")}.png';
+                link.href = canvas.toDataURL('image/png');
+                link.click();
+                document.getElementById('status').innerText = '✅ Imagem baixada!';
+            }});
+        }}
+        function copiarImagem() {{
+            render(function(canvas) {{
+                canvas.toBlob(function(blob) {{
+                    try {{
+                        navigator.clipboard.write([new ClipboardItem({{'image/png': blob}})]).then(function() {{
+                            document.getElementById('status').innerText = '✅ Copiado! Cole com Ctrl+V no e-mail ou WhatsApp.';
+                        }}).catch(function() {{
+                            document.getElementById('status').innerText = '⚠️ Navegador bloqueou cópia — use "Baixar PNG".';
+                        }});
+                    }} catch(e) {{
+                        document.getElementById('status').innerText = '⚠️ Use "Baixar PNG" neste navegador.';
+                    }}
+                }});
+            }});
+        }}
+        </script>
+    </body></html>"""
+
+    components.html(ficha_html, height=1050, scrolling=True)
 
 # ─── ACAO PRIORITARIA ────────────────────────────────────────────────────────
 
@@ -1134,47 +1233,60 @@ def page_acao(df: pd.DataFrame):
 
 def page_atualizar(df: pd.DataFrame):
     st.html(logo_header("Atualizar Base de Dados",
-                        "Importar dados de novos meses (julho, agosto...)"))
+                        "Fechamento mensal · Persistência permanente via GitHub"))
 
     left, right = st.columns([1, 1])
 
     with left:
         st.html(f"""
         <div style="background:{LGRAY};border-radius:10px;padding:20px 24px;border:1px solid {MGRAY};">
-            <div class="sec-title">Como preparar a planilha</div>
-            <div style="background:{BG_BLUE};border-radius:8px;padding:14px;margin-bottom:12px;">
-                <div style="font-size:0.76rem;font-weight:700;color:{C_BLUE};margin-bottom:8px;">
-                    OPCAO 1 (Recomendada) — Planilha Score Selgron
+            <div class="sec-title">✅ Método permanente (recomendado)</div>
+
+            <div style="background:{BG_GREEN};border-radius:8px;padding:14px;margin-bottom:14px;">
+                <div style="font-size:0.78rem;font-weight:700;color:{C_GREEN};margin-bottom:8px;">
+                    Salvar o mês na pasta <code>dados/</code> do GitHub
                 </div>
-                <div style="font-size:0.78rem;color:{DGRAY};line-height:1.8;">
-                    Aba: <b>SCORE GERAL</b><br>
-                    • FORNECEDOR · COMPRADOR<br>
-                    • SCORE_GERAL (0 a 1 ou 0 a 100)<br>
-                    • SCORE_PRAZO · SCORE_QUALIDADE<br>
-                    • TOTAL_ENTREGAS · TOTAL_NCS
-                </div>
-            </div>
-            <div style="background:{BG_AMBER};border-radius:8px;padding:14px;margin-bottom:12px;">
-                <div style="font-size:0.76rem;font-weight:700;color:{C_AMBER};margin-bottom:8px;">
-                    OPCAO 2 — Dados Brutos de Prazo
-                </div>
-                <div style="font-size:0.78rem;color:{DGRAY};line-height:1.8;">
-                    Aba: <b>BASE</b><br>
-                    • COMPRADOR · FORNECEDOR<br>
-                    • ATRASO? → "NO PRAZO" ou "ATRASADO"<br>
-                    • NF (nota fiscal)
+                <div style="font-size:0.78rem;color:{DGRAY};line-height:1.9;">
+                    Este é o único jeito que <b>nunca perde os dados</b>, mesmo quando o site reinicia.<br><br>
+                    <b>Passo a passo (1x por mês):</b><br>
+                    1. No GitHub, abra seu repositório<br>
+                    2. Entre na pasta <code>dados/</code> (crie se não existir)<br>
+                    3. Clique em <b>Add file → Upload files</b><br>
+                    4. Envie a planilha do mês nomeada assim:<br>
+                    &nbsp;&nbsp;&nbsp;<code>2026-05.xlsx</code> → Maio<br>
+                    &nbsp;&nbsp;&nbsp;<code>2026-06.xlsx</code> → Junho<br>
+                    &nbsp;&nbsp;&nbsp;<code>2026-07.xlsx</code> → Julho...<br>
+                    5. <b>Commit changes</b> → pronto, fica salvo para sempre
                 </div>
             </div>
-            <div style="background:{BG_RED};border-radius:8px;padding:10px 14px;
-                        font-size:0.75rem;color:{C_RED};">
-                ⚠️ A importacao substitui a base atual.
+
+            <div style="background:{BG_BLUE};border-radius:8px;padding:12px 14px;">
+                <div style="font-size:0.74rem;font-weight:700;color:{C_BLUE};margin-bottom:6px;">
+                    Estrutura da planilha
+                </div>
+                <div style="font-size:0.76rem;color:{DGRAY};line-height:1.7;">
+                    Aba <b>BASE_DADOS</b> com: FORNECEDOR, COMPRADOR, SCORE_GERAL,
+                    SCORE_PRAZO, SCORE_QUALIDADE, CLASSE, TOTAL_ENTREGAS, NO_PRAZO, TOTAL_ALERTAS.
+                    <br>(É exatamente o formato do seu arquivo v7.)
+                </div>
+            </div>
+
+            <div style="background:{BG_AMBER};border-radius:8px;padding:11px 14px;margin-top:12px;
+                        font-size:0.74rem;color:{C_AMBER};line-height:1.6;">
+                💡 Cada arquivo = 1 mês. O filtro de mês no topo lê automaticamente
+                todos os arquivos da pasta. Para separar maio e junho, suba os dois arquivos.
             </div>
         </div>""")
 
     with right:
         st.html(f"""
         <div style="background:white;border-radius:10px;padding:20px 24px;border:1px solid {MGRAY};">
-            <div class="sec-title">Importar Planilha</div>""")
+            <div class="sec-title">Preview rápido (temporário)</div>
+            <div style="font-size:0.76rem;color:{DGRAY};line-height:1.6;margin-bottom:4px;">
+                Use abaixo só para <b>conferir</b> uma planilha antes de subir ao GitHub.
+                Esta importação vale apenas nesta sessão e <b>não fica salva</b> para os outros.
+            </div>
+        </div>""")
 
         uploaded = st.file_uploader("Selecione o Excel (.xlsx)", type=["xlsx","xls"], key="uploader_main")
 
@@ -1192,22 +1304,24 @@ def page_atualizar(df: pd.DataFrame):
             for c in ["SCORE_GERAL","SCORE_PRAZO","SCORE_QUALIDADE"]:
                 if c in prev.columns: prev[c] = prev[c].apply(pct)
             st.dataframe(prev, use_container_width=True, hide_index=True)
-            if st.button("✅ Confirmar e salvar para todos", type="primary", use_container_width=True):
-                # Salva no disco — todos os usuários verão os dados
-                saved = save_shared_data(df_new, msg)
+            if st.button("👁️ Ver no painel (só nesta sessão)", type="primary", use_container_width=True):
+                save_shared_data(df_new, msg)
                 st.session_state.df         = df_new
                 st.session_state.data_info  = msg
                 st.session_state.data_mtime = get_data_mtime()
-                if saved:
-                    st.success("✅ Dados salvos! Todos os compradores e o diretor verão a base atualizada ao recarregar a página.")
-                else:
-                    st.warning("⚠️ Dados carregados nesta sessão, mas não foi possível salvar no disco. Outros usuários não verão a atualização.")
+                st.session_state.sel_month  = None   # força usar este preview
+                st.info("👁️ Carregado para conferência nesta sessão. Para salvar de forma permanente "
+                        "e para todos, suba o arquivo na pasta `dados/` do GitHub (instruções à esquerda).")
                 st.rerun()
 
+        # Base atual carregada
+        n_meses = len(load_all_snapshots())
+        meses_txt = f"📅 {n_meses} mês(es) na pasta dados/<br>" if n_meses else "📅 Nenhum mês na pasta dados/ ainda<br>"
         st.html(f"""
         <div style="background:{LGRAY};border-radius:8px;padding:14px 18px;margin-top:16px;border:1px solid {MGRAY};">
-            <div style="font-size:0.68rem;font-weight:700;color:{DGRAY};text-transform:uppercase;margin-bottom:8px;">Base Atual</div>
+            <div style="font-size:0.68rem;font-weight:700;color:{DGRAY};text-transform:uppercase;margin-bottom:8px;">Base em exibição ({st.session_state.get('month_label','atual')})</div>
             <div style="font-size:0.82rem;color:{DGRAY};line-height:2;">
+                {meses_txt}
                 📦 {len(df)} fornecedores<br>
                 👤 {df['COMPRADOR'].nunique()} compradores<br>
                 📈 Score medio: <b>{pct(df['SCORE_GERAL'].mean())}</b><br>
@@ -1226,42 +1340,84 @@ def main():
         page_login()
         return
 
-    # ── Carregamento de dados com detecção automática de atualização ──
-    # Verifica se outro usuário salvou dados mais novos no disco
-    disk_mtime = get_data_mtime()
-    session_mtime = st.session_state.get("data_mtime", 0.0)
+    # ════════════════════════════════════════════════════════════════════
+    #  RESOLUÇÃO DE DADOS POR MÊS (snapshots da pasta /dados no GitHub)
+    # ════════════════════════════════════════════════════════════════════
+    snapshots = load_all_snapshots()   # [(label, ano, mes, df), ...] cronológico
 
-    if st.session_state.df is None or disk_mtime > session_mtime:
-        # Tenta carregar do arquivo compartilhado (importado por outro usuário)
-        df_shared, info_shared = load_shared_data()
-        if df_shared is not None:
-            st.session_state.df       = df_shared
-            st.session_state.data_info = info_shared
-            st.session_state.data_mtime = disk_mtime
-        elif st.session_state.df is None:
-            # Nenhum arquivo compartilhado → tenta Excel local ou demo
-            with st.spinner("Carregando dados..."):
-                df_local, info_local = load_local_score()
-            st.session_state.df       = df_local
-            st.session_state.data_info = info_local
-            st.session_state.data_mtime = 0.0
+    df = None
+    prev_df = None
+    month_label = ""
+    month_labels = []
 
-    df = st.session_state.df
+    if snapshots:
+        # Há fechamentos mensais salvos no repositório → fonte oficial
+        month_labels = [s[0] for s in snapshots]
 
-    # Sidebar (complementar — stats + radio sincronizado)
+        # Mês selecionado (default = mais recente)
+        if st.session_state.sel_month not in month_labels:
+            st.session_state.sel_month = month_labels[-1]
+        sel_idx = month_labels.index(st.session_state.sel_month)
+
+        month_label = snapshots[sel_idx][0]
+        df          = snapshots[sel_idx][3]
+        # Mês anterior (para evolução)
+        if sel_idx > 0:
+            prev_df = snapshots[sel_idx - 1][3]
+        st.session_state.data_info = f"{month_label} | {len(df)} fornecedores | {len(snapshots)} meses na base"
+    else:
+        # SEM pasta /dados → fallback: upload em sessão, Excel local ou demo
+        disk_mtime    = get_data_mtime()
+        session_mtime = st.session_state.get("data_mtime", 0.0)
+        if st.session_state.df is None or disk_mtime > session_mtime:
+            df_shared, info_shared = load_shared_data()
+            if df_shared is not None:
+                st.session_state.df        = df_shared
+                st.session_state.data_info = info_shared
+                st.session_state.data_mtime = disk_mtime
+            elif st.session_state.df is None:
+                with st.spinner("Carregando dados..."):
+                    df_local, info_local = load_local_score()
+                st.session_state.df        = df_local
+                st.session_state.data_info = info_local
+                st.session_state.data_mtime = 0.0
+        df = st.session_state.df
+        month_label = "Período atual"
+
+    # Salva em sessão para uso nas páginas (evolução etc.)
+    st.session_state.df          = df
+    st.session_state.prev_df     = prev_df
+    st.session_state.month_label = month_label
+
+    # Sidebar (stats + radio sincronizado)
     show_sidebar(df)
 
-    # ── Nav bar no TOPO — sempre visível, sidebar aberto ou fechado ──
+    # Nav bar no topo — sempre visível
     show_top_nav()
+
+    # ── Seletor de MÊS DE REFERÊNCIA (só aparece se houver snapshots) ──
+    if month_labels:
+        mc1, mc2 = st.columns([1.3, 3])
+        with mc1:
+            new_month = st.selectbox(
+                "📅 Mês de referência (fechamento)",
+                month_labels,
+                index=month_labels.index(st.session_state.sel_month),
+                key="month_selector",
+            )
+            if new_month != st.session_state.sel_month:
+                st.session_state.sel_month = new_month
+                st.rerun()
 
     # Banner de dados de demonstração
     if "DEMO" in st.session_state.data_info:
         st.warning(
             "⚠️ **Dados de demonstração** — Os nomes de fornecedores são placeholders. "
-            "Vá em **📤 Base** e importe `Score_Fornecedores_Selgron_v7.xlsx` para ver os dados reais."
+            "Para dados reais que **persistem para sempre**, crie a pasta `dados/` no GitHub "
+            "e envie `2026-05.xlsx` (maio), `2026-06.xlsx` (junho), etc. Veja instruções em **📤 Base**."
         )
 
-    # Roteamento pela session_state.page
+    # Roteamento
     key = st.session_state.page
     if   key == "Painel Geral":      page_dashboard(df)
     elif key == "Painel Comprador":  page_por_comprador(df)
