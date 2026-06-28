@@ -17,7 +17,7 @@ st.set_page_config(
     page_title="Score Fornecedores | Selgron",
     page_icon="🏭",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ─── BRAND ───────────────────────────────────────────────────────────────────
@@ -162,7 +162,16 @@ def inject_css():
           radial-gradient(900px 500px at -10% 0%, rgba(46,58,130,0.07), transparent 55%),
           {CLOUD};
     }}
-    .block-container {{ padding-top:1.4rem !important; max-width:1320px; }}
+    .block-container {{
+        padding-top:1.2rem !important;
+        padding-left:2.2rem !important;
+        padding-right:2.2rem !important;
+        max-width:100% !important;
+    }}
+    /* Esconde o sidebar de vez — navegação fica 100% na barra de cima */
+    [data-testid="stSidebar"] {{ display:none !important; }}
+    [data-testid="collapsedControl"] {{ display:none !important; }}
+    [data-testid="stSidebarCollapseButton"] {{ display:none !important; }}
 
     /* ── Sidebar premium (navy translúcido) ── */
     [data-testid="stSidebar"] {{
@@ -932,30 +941,40 @@ def show_sidebar(df: pd.DataFrame):
             </div>""")
 
 
-def show_top_nav():
-    """Barra de navegação SEMPRE visível no topo — funciona com sidebar aberto ou fechado."""
+def show_top_nav(df):
+    """Barra de navegação no topo — única navegação do app (sidebar desativado)."""
     current = st.session_state.page
-    labels  = ["🏠 Geral", "📊 Comprador", "🏭 Fornecedor", "⚠️ Prioritário", "📤 Base"]
+
+    n_tot  = len(df)
+    avg    = df["SCORE_GERAL"].mean()
+    info   = st.session_state.get("data_info", "")
 
     st.markdown(f"""
     <div style="background:linear-gradient(120deg, {NAVY_900}, {NAVY_700} 70%, {NAVY_500});
-                padding:11px 18px;border-radius:14px;margin-bottom:14px;
-                display:flex;align-items:center;gap:11px;
+                padding:12px 20px;border-radius:16px;margin-bottom:14px;
+                display:flex;align-items:center;gap:13px;
                 box-shadow:0 8px 26px rgba(30,39,97,0.22);position:relative;overflow:hidden;">
-        <div style="position:absolute;right:-30px;top:-40px;width:160px;height:160px;
+        <div style="position:absolute;right:-30px;top:-50px;width:200px;height:200px;
                     border-radius:50%;background:radial-gradient(circle,rgba(247,166,0,0.18),transparent 70%);"></div>
         <img src="data:image/png;base64,{LOGO_ICON_B64}"
-             style="width:34px;height:34px;object-fit:cover;border-radius:9px;flex-shrink:0;
+             style="width:36px;height:36px;object-fit:cover;border-radius:10px;flex-shrink:0;
                     box-shadow:0 4px 12px rgba(0,0,0,0.3);position:relative;z-index:1;">
         <span style="font-family:'Plus Jakarta Sans',sans-serif;color:{GOLD_500};font-weight:800;
-                     font-size:1.1rem;letter-spacing:-0.04em;position:relative;z-index:1;">selgron</span>
-        <span style="color:rgba(255,255,255,0.5);font-size:0.72rem;font-weight:500;
-                     border-left:1px solid rgba(255,255,255,0.2);padding-left:11px;
+                     font-size:1.15rem;letter-spacing:-0.04em;position:relative;z-index:1;">selgron</span>
+        <span style="color:rgba(255,255,255,0.55);font-size:0.74rem;font-weight:500;
+                     border-left:1px solid rgba(255,255,255,0.2);padding-left:13px;
                      position:relative;z-index:1;">Score de Fornecedores · Suprimentos</span>
+        <div style="margin-left:auto;display:flex;gap:16px;align-items:center;position:relative;z-index:1;">
+            <div style="text-align:right;">
+                <div style="color:{GOLD_400};font-size:0.6rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;">Base ativa</div>
+                <div style="color:#fff;font-size:0.78rem;font-weight:600;">{n_tot} fornecedores · média {pct(avg)}</div>
+            </div>
+        </div>
     </div>""", unsafe_allow_html=True)
 
-    cols = st.columns(5, gap="small")
-    for col, label, key in zip(cols, labels, PAGES_KEYS):
+    labels = ["🏠 Geral", "📊 Comprador", "🏭 Fornecedor", "⚠️ Prioritário", "📤 Base"]
+    cols = st.columns([1,1,1,1,1,0.6], gap="small")
+    for col, label, key in zip(cols[:5], labels, PAGES_KEYS):
         with col:
             is_active = (current == key)
             btn_style = "primary" if is_active else "secondary"
@@ -963,6 +982,11 @@ def show_top_nav():
                          type=btn_style, key=f"tnav_{key}"):
                 st.session_state.page = key
                 st.rerun()
+    with cols[5]:
+        if st.button("🚪 Sair", use_container_width=True, key="tnav_sair"):
+            st.session_state.authenticated = False
+            st.session_state.df = None
+            st.rerun()
 
 # ─── PAINEL GERAL ────────────────────────────────────────────────────────────
 
@@ -977,13 +1001,69 @@ def page_dashboard(df: pd.DataFrame):
     n_crit = len(df[df["CLASSE"].str.startswith("E")])
     n_atn  = len(df[df["CLASSE"].str.startswith("D")])
     n_exc  = len(df[df["CLASSE"].str.startswith("A")])
+    n_bom  = len(df[df["CLASSE"].str.startswith("B")])
+    n_reg  = len(df[df["CLASSE"].str.startswith("C")])
+    cls_avg = get_class(avg)
+    cc_avg  = CLASSES[cls_avg]
 
-    c1,c2,c3,c4,c5 = st.columns(5)
-    with c1: st.markdown(kpi_card("Score Geral", pct(avg), f"Classe {get_class(avg)[0]}", score_bar_color(avg)), unsafe_allow_html=True)
-    with c2: st.markdown(kpi_card("Prazo de Entrega", pct(avgP), f"Peso {int(PESO_PRAZO*100)}%", BAR_BLUE), unsafe_allow_html=True)
-    with c3: st.markdown(kpi_card("Qualidade", pct(avgQ), f"Peso {int(PESO_QUAL*100)}%", BAR_GREEN), unsafe_allow_html=True)
-    with c4: st.markdown(kpi_card("Fornecedores", str(len(df)), f"{n_exc} excelentes | {df['COMPRADOR'].nunique()} compradores", NAVY), unsafe_allow_html=True)
-    with c5: st.markdown(kpi_card("Acao Prioritaria", str(n_crit+n_atn), f"🔴 {n_crit} criticos | 🟠 {n_atn} atencao", C_RED), unsafe_allow_html=True)
+    # ── HERO: termômetro do setor (gauge + barra de saúde) ──
+    hero_l, hero_r = st.columns([1, 1.35], gap="medium")
+
+    with hero_l:
+        gauge = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=avg*100,
+            number=dict(suffix="%", font=dict(size=46, family=PLOTLY_FONT, color=cc_avg["bar"])),
+            gauge=dict(
+                axis=dict(range=[0,100], tickwidth=1, tickcolor=SLATE_2,
+                          tickfont=dict(size=9, color=SLATE)),
+                bar=dict(color=cc_avg["bar"], thickness=0.28),
+                bgcolor="rgba(0,0,0,0)",
+                borderwidth=0,
+                steps=[
+                    dict(range=[0,60],  color="rgba(231,76,60,0.13)"),
+                    dict(range=[60,70], color="rgba(230,126,34,0.13)"),
+                    dict(range=[70,80], color="rgba(245,159,0,0.13)"),
+                    dict(range=[80,90], color="rgba(41,128,185,0.13)"),
+                    dict(range=[90,100],color="rgba(39,174,96,0.13)"),
+                ],
+            ),
+        ))
+        gauge.update_layout(height=230, margin=dict(l=18,r=18,t=24,b=0),
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            font=dict(family=PLOTLY_FONT))
+        gauge.add_annotation(text=f"<b>{cc_avg['label']}</b>", x=0.5, y=-0.02,
+                             showarrow=False, font=dict(size=13, color=cc_avg["bar"], family=PLOTLY_FONT))
+        st.markdown('<div class="sec-title">Saúde Geral do Setor</div>', unsafe_allow_html=True)
+        st.plotly_chart(gauge, use_container_width=True)
+
+    with hero_r:
+        st.markdown('<div class="sec-title">Composição da Base</div>', unsafe_allow_html=True)
+        total = len(df)
+        seg = ""
+        for cname, cdata in CLASSES.items():
+            n = len(df[df["CLASSE"] == cname])
+            if n == 0: continue
+            w = n/total*100
+            seg += f'<div title="{cdata["label"]}: {n}" style="width:{w}%;background:{cdata["bar"]};height:100%;"></div>'
+        st.markdown(f"""
+        <div style="background:{CARD};border:1px solid {LINE};border-radius:16px;padding:20px 22px;
+                    box-shadow:0 8px 24px rgba(16,19,32,0.05);">
+            <div style="display:flex;height:26px;border-radius:8px;overflow:hidden;margin-bottom:16px;">{seg}</div>
+            <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;text-align:center;">
+                <div><div style="font-size:1.5rem;font-weight:800;color:{BAR_GREEN};font-family:'Plus Jakarta Sans';">{n_exc}</div><div style="font-size:0.62rem;color:{SLATE};font-weight:600;">🟢 EXCELENTE</div></div>
+                <div><div style="font-size:1.5rem;font-weight:800;color:{BAR_BLUE};font-family:'Plus Jakarta Sans';">{n_bom}</div><div style="font-size:0.62rem;color:{SLATE};font-weight:600;">🔵 BOM</div></div>
+                <div><div style="font-size:1.5rem;font-weight:800;color:{BAR_AMBER};font-family:'Plus Jakarta Sans';">{n_reg}</div><div style="font-size:0.62rem;color:{SLATE};font-weight:600;">🟡 REGULAR</div></div>
+                <div><div style="font-size:1.5rem;font-weight:800;color:{BAR_ORANGE};font-family:'Plus Jakarta Sans';">{n_atn}</div><div style="font-size:0.62rem;color:{SLATE};font-weight:600;">🟠 ATENÇÃO</div></div>
+                <div><div style="font-size:1.5rem;font-weight:800;color:{BAR_RED};font-family:'Plus Jakarta Sans';">{n_crit}</div><div style="font-size:0.62rem;color:{SLATE};font-weight:600;">🔴 CRÍTICO</div></div>
+            </div>
+        </div>""", unsafe_allow_html=True)
+
+        # KPIs de prazo e qualidade embaixo
+        k1, k2, k3 = st.columns(3)
+        with k1: st.markdown(kpi_card("Prazo de Entrega", pct(avgP), "Peso 60%", BAR_BLUE), unsafe_allow_html=True)
+        with k2: st.markdown(kpi_card("Qualidade", pct(avgQ), "Peso 40%", BAR_GREEN), unsafe_allow_html=True)
+        with k3: st.markdown(kpi_card("Ação Prioritária", str(n_crit+n_atn), f"{(n_crit+n_atn)/total*100:.0f}% da base", C_RED), unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -1604,11 +1684,8 @@ def main():
     st.session_state.prev_df     = prev_df
     st.session_state.month_label = month_label
 
-    # Sidebar (stats + radio sincronizado)
-    show_sidebar(df)
-
-    # Nav bar no topo — sempre visível
-    show_top_nav()
+    # Navegação no topo (sidebar desativado — botão sumia no Streamlit Cloud)
+    show_top_nav(df)
 
     # ── Seletor de MÊS DE REFERÊNCIA (só aparece se houver snapshots) ──
     if month_labels:
