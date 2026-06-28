@@ -276,6 +276,21 @@ def inject_sidebar_js():
 
 DADOS_DIR = "dados"
 
+def _find_dados_dir():
+    """Acha a pasta de dados em qualquer variação de maiúscula (dados, Dados, DADOS)."""
+    candidatos = ["dados", "Dados", "DADOS", "data", "Data"]
+    for nome in candidatos:
+        if os.path.isdir(nome):
+            return nome
+    # Procura qualquer pasta cujo nome normalizado seja "dados"
+    try:
+        for item in os.listdir("."):
+            if os.path.isdir(item) and item.lower() in ("dados", "data"):
+                return item
+    except Exception:
+        pass
+    return None
+
 MESES_PT = {
     1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril", 5: "Maio", 6: "Junho",
     7: "Julho", 8: "Agosto", 9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro",
@@ -304,20 +319,21 @@ def load_all_snapshots():
     snapshots = []
     erros = []
 
-    if not os.path.isdir(DADOS_DIR):
-        erros.append((DADOS_DIR, "Pasta 'dados/' não encontrada no repositório"))
+    dados_dir = _find_dados_dir()
+    if dados_dir is None:
+        erros.append(("dados/", "Pasta de dados não encontrada (procurei: dados, Dados, DADOS)"))
         return snapshots, erros
 
-    files = [f for f in os.listdir(DADOS_DIR)
+    files = [f for f in os.listdir(dados_dir)
              if f.lower().endswith((".xlsx", ".xls", ".parquet"))
              and not f.startswith("~") and not f.startswith(".")]
 
     if not files:
-        erros.append((DADOS_DIR, "Pasta 'dados/' existe mas está vazia (nenhum .xlsx)"))
+        erros.append((dados_dir, f"Pasta '{dados_dir}/' existe mas não tem .xlsx dentro"))
         return snapshots, erros
 
     for fname in files:
-        path = os.path.join(DADOS_DIR, fname)
+        path = os.path.join(dados_dir, fname)
         try:
             if fname.lower().endswith(".parquet"):
                 df = pd.read_parquet(path)
