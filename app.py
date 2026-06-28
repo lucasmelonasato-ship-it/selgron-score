@@ -105,6 +105,35 @@ def progress_bar(v, color):
     return f"""<div style="background:#E8E8E8;border-radius:4px;height:9px;margin:3px 0 10px 0;">
         <div style="background:{color};width:{pct_w:.1f}%;height:9px;border-radius:4px;"></div></div>"""
 
+# ─── TEMA PLOTLY (identidade Selgron) ────────────────────────────────────────
+PLOTLY_FONT = "Inter, 'Plus Jakarta Sans', sans-serif"
+
+def style_fig(fig, height=240, showlegend=False, legend_opts=None):
+    """Aplica o tema visual Selgron a qualquer gráfico Plotly."""
+    fig.update_layout(
+        height=height,
+        margin=dict(l=6, r=10, t=10, b=6),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family=PLOTLY_FONT, size=11, color=INK),
+        showlegend=showlegend,
+        hoverlabel=dict(
+            bgcolor=NAVY_700, font_size=12,
+            font_family=PLOTLY_FONT, font_color="white",
+            bordercolor=NAVY_700,
+        ),
+        bargap=0.32,
+    )
+    if legend_opts:
+        fig.update_layout(legend=legend_opts)
+    # eixos limpos: sem linha pesada, grid sutil
+    fig.update_xaxes(showgrid=False, zeroline=False, showline=False,
+                     tickfont=dict(size=10, color=SLATE), title=None)
+    fig.update_yaxes(showgrid=True, gridcolor="rgba(100,116,139,0.10)", gridwidth=1,
+                     zeroline=False, showline=False,
+                     tickfont=dict(size=10, color=SLATE), title=None)
+    return fig
+
 # ─── CSS ─────────────────────────────────────────────────────────────────────
 
 def inject_css():
@@ -958,21 +987,24 @@ def page_dashboard(df: pd.DataFrame):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Score por comprador (mantido conforme solicitado)
-    st.markdown('<div class="sec-title">Score Medio por Comprador</div>', unsafe_allow_html=True)
+    # Score por comprador
+    st.markdown('<div class="sec-title">Score Médio por Comprador</div>', unsafe_allow_html=True)
     bav = df.groupby("COMPRADOR")["SCORE_GERAL"].mean().sort_values(ascending=False).reset_index()
     bav["first"] = bav["COMPRADOR"].apply(lambda x: x.split()[0])
     fig = go.Figure(go.Bar(
         x=bav["first"], y=bav["SCORE_GERAL"]*100,
-        marker_color=bav["SCORE_GERAL"].apply(score_bar_color).tolist(),
-        text=bav["SCORE_GERAL"].apply(pct), textposition="outside", textfont=dict(size=11),
+        marker=dict(
+            color=bav["SCORE_GERAL"].apply(score_bar_color).tolist(),
+            cornerradius=8,
+            line=dict(width=0),
+        ),
+        text=bav["SCORE_GERAL"].apply(pct), textposition="outside",
+        textfont=dict(size=12, color=INK, family=PLOTLY_FONT),
+        hovertemplate="<b>%{x}</b><br>Score: %{y:.1f}%<extra></extra>",
     ))
-    fig.update_layout(
-        height=220, margin=dict(l=0,r=0,t=8,b=8),
-        yaxis=dict(range=[0,112],ticksuffix="%",showgrid=True,gridcolor="#EEE",tickfont=dict(size=10)),
-        xaxis=dict(tickfont=dict(size=11)),
-        plot_bgcolor="white", paper_bgcolor="white", showlegend=False,
-    )
+    style_fig(fig, height=240)
+    fig.update_yaxes(range=[0, 112], ticksuffix="%")
+    fig.update_xaxes(tickfont=dict(size=11, color=INK))
     st.plotly_chart(fig, use_container_width=True)
 
     # ── Filtros do ranking ──
@@ -1041,39 +1073,49 @@ def page_por_comprador(df: pd.DataFrame):
     col_pie, col_scatter = st.columns(2)
 
     with col_pie:
-        st.markdown('<div class="sec-title">Distribuicao por Classe</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sec-title">Distribuição por Classe</div>', unsafe_allow_html=True)
         cc_counts = dfb["CLASSE"].value_counts()
         lbs_raw = [c for c in CLASSES if c in cc_counts.index]
-        # Nomes completos no label (ex: "EXCELENTE", "CRÍTICO")
-        lbs_full  = [CLASSES[c]["emoji"] + " " + CLASSES[c]["label"] for c in lbs_raw]
+        lbs_full  = [CLASSES[c]["label"] for c in lbs_raw]
         fig_pie = go.Figure(go.Pie(
             labels=lbs_full,
             values=[cc_counts[c] for c in lbs_raw],
-            marker_colors=[CLASSES[c]["bar"] for c in lbs_raw],
-            textinfo="label+value+percent",
-            textfont=dict(size=12),
-            hole=0.42,
+            marker=dict(colors=[CLASSES[c]["bar"] for c in lbs_raw],
+                        line=dict(color="white", width=2)),
+            textinfo="label+value",
+            textfont=dict(size=11, family=PLOTLY_FONT, color="white"),
+            hole=0.58,
+            hovertemplate="<b>%{label}</b><br>%{value} fornecedores · %{percent}<extra></extra>",
+            sort=False,
         ))
-        fig_pie.update_layout(height=300, margin=dict(l=0,r=0,t=8,b=8),
-                              plot_bgcolor="white", paper_bgcolor="white", showlegend=False)
+        total_forn = len(dfb)
+        fig_pie.add_annotation(text=f"<b>{total_forn}</b><br><span style='font-size:10px'>fornecedores</span>",
+                               x=0.5, y=0.5, showarrow=False,
+                               font=dict(size=22, family=PLOTLY_FONT, color=NAVY_700))
+        style_fig(fig_pie, height=300)
+        fig_pie.update_xaxes(visible=False); fig_pie.update_yaxes(visible=False)
         st.plotly_chart(fig_pie, use_container_width=True)
 
     with col_scatter:
-        st.markdown('<div class="sec-title">Prazo x Qualidade</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sec-title">Prazo × Qualidade</div>', unsafe_allow_html=True)
         color_map = {c: CLASSES[c]["bar"] for c in CLASSES}
         fig_sc = px.scatter(dfb, x="SCORE_PRAZO", y="SCORE_QUALIDADE",
                             color="CLASSE", color_discrete_map=color_map,
                             hover_name="FORNECEDOR",
                             labels={"SCORE_PRAZO":"Prazo","SCORE_QUALIDADE":"Qualidade"})
-        fig_sc.update_traces(marker=dict(size=8))
-        fig_sc.add_vline(x=0.70,line_dash="dash",line_color="#aaa",line_width=1)
-        fig_sc.add_hline(y=0.70,line_dash="dash",line_color="#aaa",line_width=1)
-        fig_sc.update_layout(
-            height=300, margin=dict(l=0,r=0,t=8,b=8),
-            xaxis=dict(tickformat=".0%",range=[0,1.08],showgrid=True,gridcolor="#EEE"),
-            yaxis=dict(tickformat=".0%",range=[0,1.08],showgrid=True,gridcolor="#EEE"),
-            plot_bgcolor="white", paper_bgcolor="white",
-            legend=dict(font=dict(size=8),title=""))
+        fig_sc.update_traces(marker=dict(size=10, line=dict(width=1, color="white"), opacity=0.85))
+        # Zona de meta (verde claro no canto superior direito)
+        fig_sc.add_shape(type="rect", x0=0.70, y0=0.70, x1=1.08, y1=1.08,
+                         fillcolor="rgba(39,174,96,0.06)", line=dict(width=0), layer="below")
+        fig_sc.add_vline(x=0.70, line_dash="dash", line_color="rgba(100,116,139,0.4)", line_width=1)
+        fig_sc.add_hline(y=0.70, line_dash="dash", line_color="rgba(100,116,139,0.4)", line_width=1)
+        style_fig(fig_sc, height=300, showlegend=True,
+                  legend_opts=dict(font=dict(size=9), title="", orientation="h", y=-0.18))
+        fig_sc.update_xaxes(tickformat=".0%", range=[0,1.08], title="Prazo",
+                            title_font=dict(size=10, color=SLATE))
+        fig_sc.update_yaxes(tickformat=".0%", range=[0,1.08], title="Qualidade",
+                            title_font=dict(size=10, color=SLATE),
+                            gridcolor="rgba(100,116,139,0.10)")
         st.plotly_chart(fig_sc, use_container_width=True)
 
     # Tabela colorida da carteira
@@ -1350,24 +1392,27 @@ def page_acao(df: pd.DataFrame):
             # Grafico Prazo x Qualidade agrupado
             col_g, col_s = st.columns([1.6, 1])
             with col_g:
-                st.markdown('<div class="sec-title">Prazo x Qualidade por Fornecedor</div>', unsafe_allow_html=True)
+                st.markdown('<div class="sec-title">Prazo × Qualidade por Fornecedor</div>', unsafe_allow_html=True)
                 ds = dfs.sort_values("SCORE_GERAL", ascending=True)
                 fig = go.Figure()
                 fig.add_trace(go.Bar(y=ds["FORNECEDOR"].apply(lambda x: x[:38]),
                                      x=ds["SCORE_PRAZO"]*100, name="Prazo (60%)",
-                                     orientation="h", marker_color=BAR_BLUE, opacity=0.85))
+                                     orientation="h",
+                                     marker=dict(color=BAR_BLUE, cornerradius=5),
+                                     hovertemplate="<b>%{y}</b><br>Prazo: %{x:.1f}%<extra></extra>"))
                 fig.add_trace(go.Bar(y=ds["FORNECEDOR"].apply(lambda x: x[:38]),
                                      x=ds["SCORE_QUALIDADE"]*100, name="Qualidade (40%)",
-                                     orientation="h", marker_color=BAR_GREEN, opacity=0.85))
-                fig.add_vline(x=70,line_dash="dash",line_color="#888",line_width=1,
-                              annotation_text="Meta 70%",annotation_font_size=9)
-                fig.update_layout(barmode="group",height=max(320,len(dfs)*32),
-                                  margin=dict(l=10,r=20,t=8,b=8),
-                                  xaxis=dict(range=[0,110],ticksuffix="%",showgrid=True,
-                                             gridcolor="#EEE",tickfont=dict(size=9)),
-                                  yaxis=dict(tickfont=dict(size=9)),
-                                  plot_bgcolor="white",paper_bgcolor="white",
-                                  legend=dict(orientation="h",y=1.04,font=dict(size=9)))
+                                     orientation="h",
+                                     marker=dict(color=BAR_GREEN, cornerradius=5),
+                                     hovertemplate="<b>%{y}</b><br>Qualidade: %{x:.1f}%<extra></extra>"))
+                fig.add_vline(x=70, line_dash="dash", line_color="rgba(100,116,139,0.5)", line_width=1,
+                              annotation_text="Meta 70%", annotation_font_size=9,
+                              annotation_font_color=SLATE)
+                style_fig(fig, height=max(320, len(dfs)*34), showlegend=True,
+                          legend_opts=dict(orientation="h", y=1.04, font=dict(size=10)))
+                fig.update_layout(barmode="group")
+                fig.update_xaxes(range=[0,110], ticksuffix="%")
+                fig.update_yaxes(tickfont=dict(size=9, color=INK), showgrid=False)
                 st.plotly_chart(fig, use_container_width=True)
 
             with col_s:
@@ -1376,12 +1421,13 @@ def page_acao(df: pd.DataFrame):
                 bc.columns = ["Comprador","Qtd"]
                 bc["first"] = bc["Comprador"].apply(lambda x: x.split()[0])
                 clr = BAR_RED if tag == "E" else BAR_ORANGE
-                fig2 = go.Figure(go.Bar(x=bc["first"],y=bc["Qtd"],marker_color=clr,
-                                        text=bc["Qtd"],textposition="outside"))
-                fig2.update_layout(height=240,margin=dict(l=0,r=0,t=8,b=8),
-                                   yaxis=dict(showgrid=True,gridcolor="#EEE",tickfont=dict(size=9)),
-                                   xaxis=dict(tickfont=dict(size=9)),
-                                   plot_bgcolor="white",paper_bgcolor="white",showlegend=False)
+                fig2 = go.Figure(go.Bar(
+                    x=bc["first"], y=bc["Qtd"],
+                    marker=dict(color=clr, cornerradius=7),
+                    text=bc["Qtd"], textposition="outside",
+                    textfont=dict(family=PLOTLY_FONT, color=INK),
+                    hovertemplate="<b>%{x}</b><br>%{y} fornecedor(es)<extra></extra>"))
+                style_fig(fig2, height=240)
                 st.plotly_chart(fig2, use_container_width=True)
 
                 st.markdown('<div class="sec-title">Os 5 Piores</div>', unsafe_allow_html=True)
