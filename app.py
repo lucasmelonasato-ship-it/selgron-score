@@ -28,6 +28,20 @@ LGRAY  = "#F5F5F5"
 MGRAY  = "#DDDDDD"
 DGRAY  = "#595959"
 
+# ─── Paleta moderna (dashboard premium) ──────────────────────────────────────
+NAVY_900 = "#141A3C"   # navy profundo (fundos escuros, hero)
+NAVY_700 = "#1E2761"   # navy Selgron (identidade)
+NAVY_500 = "#2E3A82"   # navy claro (hover, acentos)
+GOLD_500 = "#F7A600"   # dourado Selgron
+GOLD_400 = "#FFB627"   # dourado claro (highlights)
+INK      = "#0F1320"   # texto quase preto
+SLATE    = "#64748B"   # texto secundário moderno
+SLATE_2  = "#94A3B8"   # texto terciário
+CLOUD    = "#F8FAFC"   # fundo geral claro (cinza-azulado)
+CARD     = "#FFFFFF"   # fundo de cards
+LINE     = "#E8ECF2"   # bordas sutis
+GLASS    = "rgba(255,255,255,0.7)"
+
 C_GREEN  = "#155724"; BG_GREEN  = "#D4EDDA"; BAR_GREEN  = "#27AE60"
 C_BLUE   = "#1A5276"; BG_BLUE   = "#DDEEFF"; BAR_BLUE   = "#2980B9"
 C_AMBER  = "#7D6608"; BG_AMBER  = "#FFF3BF"; BAR_AMBER  = "#F59F00"
@@ -96,120 +110,202 @@ def progress_bar(v, color):
 def inject_css():
     st.markdown(f"""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-    html, body, [class*="css"] {{ font-family:'Inter','Calibri',sans-serif; }}
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
+
+    :root {{
+        --navy900:{NAVY_900}; --navy700:{NAVY_700}; --navy500:{NAVY_500};
+        --gold:{GOLD_500}; --gold400:{GOLD_400};
+        --ink:{INK}; --slate:{SLATE}; --slate2:{SLATE_2};
+        --cloud:{CLOUD}; --card:{CARD}; --line:{LINE};
+    }}
+
+    html, body, [class*="css"] {{
+        font-family:'Inter','Plus Jakarta Sans',sans-serif;
+        color:{INK};
+    }}
+    h1,h2,h3,.display {{ font-family:'Plus Jakarta Sans','Inter',sans-serif; }}
     #MainMenu, footer, header {{ visibility:hidden; }}
 
-    /* ── Sidebar ── */
-    [data-testid="stSidebar"] {{ background:{NAVY} !important; min-width:230px !important; }}
-    [data-testid="stSidebar"] * {{ color:{WHITE} !important; }}
-    [data-testid="stSidebar"] hr {{ border-color:rgba(255,255,255,0.12) !important; }}
+    /* ── App background: gradiente sutil ── */
+    [data-testid="stAppViewContainer"] {{
+        background:
+          radial-gradient(1200px 600px at 90% -10%, rgba(247,166,0,0.06), transparent 60%),
+          radial-gradient(900px 500px at -10% 0%, rgba(46,58,130,0.07), transparent 55%),
+          {CLOUD};
+    }}
+    .block-container {{ padding-top:1.4rem !important; max-width:1320px; }}
+
+    /* ── Sidebar premium (navy translúcido) ── */
+    [data-testid="stSidebar"] {{
+        background:linear-gradient(180deg, {NAVY_900} 0%, {NAVY_700} 100%) !important;
+        border-right:1px solid rgba(247,166,0,0.15);
+        min-width:235px !important;
+    }}
+    [data-testid="stSidebar"] * {{ color:#E8EBF5 !important; }}
+    [data-testid="stSidebar"] hr {{ border-color:rgba(255,255,255,0.08) !important; }}
     [data-testid="stSidebar"] .stRadio > label {{
-        color:{GOLD} !important; font-size:0.68rem !important;
-        font-weight:700 !important; text-transform:uppercase; letter-spacing:0.09em;
+        color:{GOLD_400} !important; font-size:0.62rem !important;
+        font-weight:700 !important; text-transform:uppercase; letter-spacing:0.14em;
     }}
     [data-testid="stSidebar"] .stRadio div[role="radiogroup"] label {{
-        color:{WHITE} !important; font-size:0.85rem !important;
-        font-weight:500 !important; padding:7px 0;
+        color:#E8EBF5 !important; font-size:0.85rem !important;
+        font-weight:500 !important; padding:8px 10px; border-radius:8px;
+        transition:all 0.15s; margin:1px 0;
     }}
-    [data-testid="stSidebar"] .stRadio div[role="radiogroup"] label:hover {{ color:{GOLD} !important; }}
+    [data-testid="stSidebar"] .stRadio div[role="radiogroup"] label:hover {{
+        color:#fff !important; background:rgba(247,166,0,0.12);
+    }}
     [data-testid="stSidebar"] .stSelectbox label {{
-        color:{GOLD} !important; font-size:0.68rem !important;
-        font-weight:700; text-transform:uppercase; letter-spacing:0.09em;
+        color:{GOLD_400} !important; font-size:0.62rem !important;
+        font-weight:700; text-transform:uppercase; letter-spacing:0.12em;
     }}
     [data-testid="stSidebar"] .stSelectbox > div > div {{
-        background:rgba(255,255,255,0.08) !important;
-        border:1px solid rgba(247,166,0,0.35) !important; border-radius:6px;
+        background:rgba(255,255,255,0.06) !important;
+        border:1px solid rgba(247,166,0,0.25) !important; border-radius:9px;
     }}
-
-    /* ── Sidebar collapse button (seta de recolher dentro do menu) ── */
     [data-testid="stSidebarCollapseButton"] button {{
         background:rgba(247,166,0,0.18) !important;
         border:1px solid rgba(247,166,0,0.4) !important;
-        border-radius:6px !important;
-        color:{GOLD} !important;
-        width:36px !important;
-        height:36px !important;
+        border-radius:8px !important; color:{GOLD_400} !important;
     }}
     [data-testid="stSidebarCollapseButton"] button:hover {{
-        background:{GOLD} !important;
-        color:{NAVY} !important;
+        background:{GOLD_500} !important; color:{NAVY_900} !important;
     }}
-    /* ── Botão de EXPANDIR (quando menu está fechado) — forçado via JS abaixo ── */
 
-    /* ── Main BG ── */
-    [data-testid="stAppViewContainer"] > .main {{ background:#F4F5F9; }}
-
-    /* ── KPI Cards ── */
+    /* ── KPI cards (glass + hover lift) ── */
     .kpi-card {{
-        background:{WHITE}; border-radius:10px; padding:16px 20px;
-        border:1px solid {MGRAY}; border-top:3px solid {GOLD};
-        box-shadow:0 2px 8px rgba(30,39,97,0.07); height:100%;
+        background:{CARD}; border-radius:18px; padding:18px 20px;
+        border:1px solid {LINE};
+        box-shadow:0 1px 2px rgba(16,19,32,0.04), 0 8px 24px rgba(16,19,32,0.05);
+        height:100%; position:relative; overflow:hidden;
+        transition:transform 0.18s ease, box-shadow 0.18s ease;
+    }}
+    .kpi-card::before {{
+        content:""; position:absolute; top:0; left:0; right:0; height:3px;
+        background:linear-gradient(90deg, {GOLD_500}, {GOLD_400});
+        opacity:0.9;
+    }}
+    .kpi-card:hover {{
+        transform:translateY(-3px);
+        box-shadow:0 2px 4px rgba(16,19,32,0.05), 0 16px 40px rgba(16,19,32,0.10);
     }}
     .kpi-label {{
-        font-size:0.68rem; font-weight:700; text-transform:uppercase;
-        letter-spacing:0.07em; color:{DGRAY}; margin-bottom:6px;
+        font-size:0.64rem; font-weight:700; text-transform:uppercase;
+        letter-spacing:0.1em; color:{SLATE}; margin-bottom:8px;
     }}
-    .kpi-value {{ font-size:1.9rem; font-weight:800; color:{NAVY}; line-height:1; }}
-    .kpi-sub {{ font-size:0.75rem; color:{DGRAY}; margin-top:5px; }}
+    .kpi-value {{
+        font-family:'Plus Jakarta Sans',sans-serif;
+        font-size:2.1rem; font-weight:800; color:{NAVY_700}; line-height:1;
+        letter-spacing:-0.02em;
+    }}
+    .kpi-sub {{ font-size:0.74rem; color:{SLATE}; margin-top:7px; font-weight:500; }}
 
     /* ── Section title ── */
     .sec-title {{
-        font-size:0.72rem; font-weight:700; color:{DGRAY};
-        text-transform:uppercase; letter-spacing:0.09em;
-        margin:20px 0 10px 0; padding-bottom:6px; border-bottom:2px solid {GOLD};
-    }}
-
-    /* ── Page header ── */
-    .page-header {{
-        background:{NAVY}; color:{WHITE}; padding:16px 24px;
-        border-radius:10px; margin-bottom:20px;
-        display:flex; align-items:center; justify-content:space-between;
-    }}
-    .page-header h1 {{ margin:0; font-size:1.35rem; font-weight:700; color:{WHITE}; }}
-    .page-header .sub {{ font-size:0.8rem; color:{GOLD}; margin-top:2px; }}
-    .ph-logo {{
+        font-size:0.66rem; font-weight:700; color:{SLATE};
+        text-transform:uppercase; letter-spacing:0.13em;
+        margin:24px 0 12px 0; padding-bottom:0;
         display:flex; align-items:center; gap:10px;
     }}
+    .sec-title::after {{
+        content:""; flex:1; height:1px;
+        background:linear-gradient(90deg, {LINE}, transparent);
+    }}
+
+    /* ── Page header (hero band) ── */
+    .page-header {{
+        background:linear-gradient(120deg, {NAVY_900} 0%, {NAVY_700} 55%, {NAVY_500} 100%);
+        color:#fff; padding:22px 28px; border-radius:20px; margin-bottom:22px;
+        display:flex; align-items:center; justify-content:space-between;
+        position:relative; overflow:hidden;
+        box-shadow:0 12px 40px rgba(30,39,97,0.22);
+    }}
+    .page-header::after {{
+        content:""; position:absolute; right:-40px; top:-60px;
+        width:280px; height:280px; border-radius:50%;
+        background:radial-gradient(circle, rgba(247,166,0,0.22), transparent 70%);
+    }}
+    .page-header h1 {{
+        margin:0; font-size:1.5rem; font-weight:800; color:#fff;
+        letter-spacing:-0.02em; position:relative; z-index:1;
+    }}
+    .page-header .sub {{
+        font-size:0.82rem; color:{GOLD_400}; margin-top:4px;
+        font-weight:600; position:relative; z-index:1;
+    }}
+    .ph-logo {{ display:flex; align-items:center; gap:11px; position:relative; z-index:1; }}
     .ph-logo-text {{
-        font-size:1.6rem; font-weight:800; color:{GOLD}; letter-spacing:-1px; opacity:0.9;
+        font-family:'Plus Jakarta Sans',sans-serif;
+        font-size:1.55rem; font-weight:800; color:{GOLD_500};
+        letter-spacing:-0.04em;
     }}
 
     /* ── Ranking table ── */
-    .rank-table {{ width:100%; border-collapse:collapse; font-size:0.82rem; border-radius:8px; overflow:hidden; }}
+    .rank-table {{ width:100%; border-collapse:separate; border-spacing:0; font-size:0.82rem; }}
     .rank-table th {{
-        background:{NAVY}; color:{WHITE}; padding:9px 12px;
-        font-size:0.7rem; font-weight:700; text-transform:uppercase; letter-spacing:0.07em;
-        text-align:left;
+        background:{NAVY_700}; color:#fff; padding:11px 13px;
+        font-size:0.62rem; font-weight:700; text-transform:uppercase;
+        letter-spacing:0.09em; text-align:left; position:sticky; top:0;
     }}
-    .rank-table th.num {{ text-align:center; width:50px; }}
-    .rank-table th.pct {{ text-align:center; width:80px; }}
-    .rank-table td {{ padding:7px 12px; border-bottom:1px solid rgba(0,0,0,0.04); }}
-    .rank-table td.num {{ text-align:center; font-weight:700; color:{DGRAY}; }}
-    .rank-table td.pct {{ text-align:center; font-weight:700; }}
-    .rank-table tbody tr:hover {{ filter:brightness(0.96); cursor:default; }}
+    .rank-table th:first-child {{ border-top-left-radius:12px; }}
+    .rank-table th:last-child {{ border-top-right-radius:12px; }}
+    .rank-table th.num {{ text-align:center; width:46px; }}
+    .rank-table th.pct {{ text-align:center; width:78px; }}
+    .rank-table td {{ padding:9px 13px; border-bottom:1px solid {LINE}; }}
+    .rank-table td.num {{ text-align:center; font-weight:700; color:{SLATE}; }}
+    .rank-table td.pct {{ text-align:center; font-weight:700; font-family:'Plus Jakarta Sans',sans-serif; }}
+    .rank-table tbody tr {{ transition:background 0.12s; }}
+    .rank-table tbody tr:hover {{ filter:brightness(0.97); }}
 
     /* ── Ficha ── */
     .ficha-wrap {{
-        background:{WHITE}; border:1px solid {MGRAY}; border-radius:10px;
+        background:{CARD}; border:1px solid {LINE}; border-radius:18px;
         padding:28px 32px; max-width:740px; margin:0 auto;
-        box-shadow:0 4px 20px rgba(30,39,97,0.1);
+        box-shadow:0 12px 40px rgba(30,39,97,0.12);
     }}
 
     /* ── Login ── */
     .login-wrap {{
-        max-width:370px; margin:7vh auto; background:{WHITE};
-        border-radius:12px; padding:40px 36px;
-        box-shadow:0 8px 40px rgba(30,39,97,0.15);
-        border-top:4px solid {GOLD}; text-align:center;
+        max-width:400px; margin:5vh auto; background:{CARD};
+        border-radius:22px; padding:44px 40px;
+        box-shadow:0 30px 80px rgba(10,14,30,0.45);
+        border:1px solid rgba(247,166,0,0.2); text-align:center;
     }}
 
     /* ── Buttons ── */
-    .stButton > button[kind="primary"] {{
-        background:{NAVY} !important; color:{WHITE} !important;
-        border:none !important; border-radius:6px !important; font-weight:600 !important;
+    .stButton > button {{
+        border-radius:11px !important; font-weight:600 !important;
+        transition:all 0.16s !important;
     }}
-    .stButton > button[kind="primary"]:hover {{ background:{GOLD} !important; color:{NAVY} !important; }}
+    .stButton > button[kind="primary"] {{
+        background:linear-gradient(135deg, {NAVY_700}, {NAVY_500}) !important;
+        color:#fff !important; border:none !important;
+        box-shadow:0 6px 18px rgba(30,39,97,0.28) !important;
+    }}
+    .stButton > button[kind="primary"]:hover {{
+        background:linear-gradient(135deg, {GOLD_500}, {GOLD_400}) !important;
+        color:{NAVY_900} !important; transform:translateY(-1px);
+    }}
+
+    /* ── Top nav buttons ── */
+    div[data-testid="stHorizontalBlock"] .stButton button {{
+        border-radius:12px !important; font-size:0.8rem !important;
+        font-weight:600 !important; padding:9px 6px !important;
+    }}
+
+    /* ── Selectbox / inputs ── */
+    .stSelectbox > div > div, .stTextInput > div > div {{
+        border-radius:11px !important; border-color:{LINE} !important;
+    }}
+
+    /* ── Tabs ── */
+    .stTabs [data-baseweb="tab-list"] {{ gap:4px; }}
+    .stTabs [data-baseweb="tab"] {{
+        border-radius:10px 10px 0 0; font-weight:600; font-size:0.85rem;
+    }}
+
+    /* ── Dataframe ── */
+    [data-testid="stDataFrame"] {{ border-radius:12px; overflow:hidden; border:1px solid {LINE}; }}
 
     /* ── Print ── */
     @media print {{
@@ -220,6 +316,7 @@ def inject_css():
     }}
     </style>
     """, unsafe_allow_html=True)
+
 
 # ─── JAVASCRIPT — botão expandir menu (sidebar colapsado) ────────────────────
 
@@ -644,13 +741,20 @@ def ranking_table_html(df_show: pd.DataFrame) -> str:
 def logo_header(title, subtitle):
     return f"""
     <div class="page-header">
-        <div>
+        <div style="position:relative;z-index:1;">
+            <div style="display:inline-block;font-size:0.6rem;font-weight:700;
+                        text-transform:uppercase;letter-spacing:0.16em;color:{GOLD_400};
+                        background:rgba(247,166,0,0.14);padding:4px 11px;border-radius:20px;
+                        border:1px solid rgba(247,166,0,0.3);margin-bottom:9px;">
+                Suprimentos · Score de Fornecedores
+            </div>
             <h1>{title}</h1>
             <div class="sub">{subtitle}</div>
         </div>
         <div class="ph-logo">
             <img src="data:image/png;base64,{LOGO_ICON_B64}"
-                 style="width:48px;height:48px;object-fit:cover;border-radius:6px;opacity:0.9;">
+                 style="width:52px;height:52px;object-fit:cover;border-radius:13px;
+                        box-shadow:0 6px 18px rgba(0,0,0,0.3);">
             <div class="ph-logo-text">selgron</div>
         </div>
     </div>"""
@@ -661,34 +765,67 @@ def page_login():
     st.markdown(f"""
     <style>
     [data-testid="stAppViewContainer"] {{
-        background: linear-gradient(145deg, {NAVY} 0%, #0d1540 100%);
+        background:
+          radial-gradient(900px 500px at 80% -10%, rgba(247,166,0,0.18), transparent 55%),
+          radial-gradient(700px 500px at 10% 110%, rgba(46,58,130,0.5), transparent 55%),
+          linear-gradient(160deg, {NAVY_900} 0%, {NAVY_700} 60%, {NAVY_500} 100%);
     }}
+    .block-container {{ padding-top:3vh !important; }}
+    .login-badges {{ display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin:18px 0 6px; }}
+    .login-badge {{
+        font-size:0.64rem; font-weight:600; color:{SLATE};
+        background:{CLOUD}; border:1px solid {LINE};
+        padding:5px 12px; border-radius:20px;
+    }}
+    @keyframes floatIn {{ from {{ opacity:0; transform:translateY(14px); }} to {{ opacity:1; transform:none; }} }}
+    .login-wrap {{ animation:floatIn 0.6s ease; }}
     </style>
-    <div class="login-wrap">
-        <img src="data:image/png;base64,{LOGO_ICON_B64}"
-             style="width:70px;height:70px;object-fit:cover;border-radius:10px;margin-bottom:10px;">
-        <div style="font-size:2rem;font-weight:800;color:{NAVY};letter-spacing:-1px;">
-            sel<span style="color:{GOLD};">g</span>ron
+
+    <div style="text-align:center;margin:2vh auto 0;max-width:560px;animation:floatIn 0.5s ease;">
+        <div style="display:inline-flex;align-items:center;gap:12px;margin-bottom:6px;">
+            <img src="data:image/png;base64,{LOGO_ICON_B64}"
+                 style="width:46px;height:46px;border-radius:12px;object-fit:cover;
+                        box-shadow:0 8px 24px rgba(0,0,0,0.4);">
+            <span style="font-family:'Plus Jakarta Sans',sans-serif;font-size:2rem;
+                         font-weight:800;color:{GOLD_500};letter-spacing:-0.04em;">selgron</span>
         </div>
-        <div style="font-size:0.82rem;color:{DGRAY};margin-bottom:28px;">
-            Sistema de Score de Fornecedores
+        <div style="font-family:'Plus Jakarta Sans',sans-serif;font-size:2.1rem;font-weight:800;
+                    color:#fff;letter-spacing:-0.03em;line-height:1.15;margin-top:8px;">
+            Score de Fornecedores
+        </div>
+        <div style="font-size:0.95rem;color:#B8C0DB;margin-top:10px;line-height:1.5;">
+            Inteligência de Suprimentos · Selgron Industrial<br>
+            <span style="color:{GOLD_400};font-weight:600;">Prazo de entrega + Qualidade</span> em um único score por fornecedor
+        </div>
+    </div>
+
+    <div class="login-wrap">
+        <div style="font-family:'Plus Jakarta Sans',sans-serif;font-size:1.15rem;font-weight:700;
+                    color:{INK};margin-bottom:4px;">Acesso restrito</div>
+        <div style="font-size:0.8rem;color:{SLATE};margin-bottom:22px;">
+            Área de Suprimentos · entre com a senha da equipe
         </div>
     </div>""", unsafe_allow_html=True)
 
-    c1, c2, c3 = st.columns([1, 1.1, 1])
+    c1, c2, c3 = st.columns([1, 1.25, 1])
     with c2:
         pw = st.text_input("Senha", type="password",
-                           placeholder="Digite a senha...", label_visibility="collapsed")
-        if st.button("Entrar", use_container_width=True, type="primary"):
+                           placeholder="Digite a senha de acesso...", label_visibility="collapsed")
+        if st.button("Entrar no painel", use_container_width=True, type="primary"):
             if pw == "Acesso2026":
                 st.session_state.authenticated = True
                 st.rerun()
             else:
                 st.error("Senha incorreta.")
-        st.html(f"""
-        <div style="text-align:center;margin-top:20px;font-size:0.72rem;color:rgba(30,39,97,0.4);">
+        st.markdown(f"""
+        <div class="login-badges">
+            <span class="login-badge">🏭 200+ fornecedores</span>
+            <span class="login-badge">📊 7 compradores</span>
+            <span class="login-badge">📅 Fechamento mensal</span>
+        </div>
+        <div style="text-align:center;margin-top:14px;font-size:0.7rem;color:#8B95B8;">
             Selgron Industrial · Suprimentos · 2026
-        </div>""")
+        </div>""", unsafe_allow_html=True)
 
 # ─── SIDEBAR ─────────────────────────────────────────────────────────────────
 
@@ -772,23 +909,20 @@ def show_top_nav():
     labels  = ["🏠 Geral", "📊 Comprador", "🏭 Fornecedor", "⚠️ Prioritário", "📤 Base"]
 
     st.markdown(f"""
-    <style>
-    /* Estilo dos botões do nav bar */
-    div[data-testid="stHorizontalBlock"] .stButton button {{
-        border-radius: 6px !important;
-        font-size: 0.78rem !important;
-        font-weight: 600 !important;
-        padding: 6px 4px !important;
-        border: 1px solid rgba(30,39,97,0.2) !important;
-        transition: all 0.15s !important;
-    }}
-    </style>
-    <div style="background:{NAVY};padding:8px 14px 4px 14px;border-radius:10px;
-                margin-bottom:14px;display:flex;align-items:center;gap:8px;">
+    <div style="background:linear-gradient(120deg, {NAVY_900}, {NAVY_700} 70%, {NAVY_500});
+                padding:11px 18px;border-radius:14px;margin-bottom:14px;
+                display:flex;align-items:center;gap:11px;
+                box-shadow:0 8px 26px rgba(30,39,97,0.22);position:relative;overflow:hidden;">
+        <div style="position:absolute;right:-30px;top:-40px;width:160px;height:160px;
+                    border-radius:50%;background:radial-gradient(circle,rgba(247,166,0,0.18),transparent 70%);"></div>
         <img src="data:image/png;base64,{LOGO_ICON_B64}"
-             style="width:28px;height:28px;object-fit:cover;border-radius:4px;flex-shrink:0;">
-        <span style="color:{GOLD};font-weight:800;font-size:1rem;letter-spacing:-0.5px;
-                     margin-right:6px;flex-shrink:0;">selgron</span>
+             style="width:34px;height:34px;object-fit:cover;border-radius:9px;flex-shrink:0;
+                    box-shadow:0 4px 12px rgba(0,0,0,0.3);position:relative;z-index:1;">
+        <span style="font-family:'Plus Jakarta Sans',sans-serif;color:{GOLD_500};font-weight:800;
+                     font-size:1.1rem;letter-spacing:-0.04em;position:relative;z-index:1;">selgron</span>
+        <span style="color:rgba(255,255,255,0.5);font-size:0.72rem;font-weight:500;
+                     border-left:1px solid rgba(255,255,255,0.2);padding-left:11px;
+                     position:relative;z-index:1;">Score de Fornecedores · Suprimentos</span>
     </div>""", unsafe_allow_html=True)
 
     cols = st.columns(5, gap="small")
@@ -804,8 +938,9 @@ def show_top_nav():
 # ─── PAINEL GERAL ────────────────────────────────────────────────────────────
 
 def page_dashboard(df: pd.DataFrame):
+    month_label = st.session_state.get("month_label", "Período atual")
     st.html(logo_header("Painel Geral de Fornecedores",
-                         f"Performance consolidada · {datetime.now().strftime('%B %Y')}"))
+                         f"Performance consolidada · {month_label}"))
 
     avg  = df["SCORE_GERAL"].mean()
     avgP = df["SCORE_PRAZO"].mean()
