@@ -296,38 +296,55 @@ def _parse_month_from_filename(fname: str):
 @st.cache_data(show_spinner=False)
 def load_all_snapshots():
     """
-    Lê TODOS os arquivos da pasta 'dados/' e retorna uma lista ordenada
-    cronologicamente: [(label, ano, mes, df), ...].
-    Cada arquivo = um fechamento mensal (snapshot).
+    Lê TODOS os arquivos da pasta 'dados/' e retorna:
+      (snapshots, erros)
+    snapshots = [(label, ano, mes, df), ...] ordenado cronologicamente
+    erros     = [(arquivo, motivo), ...]  para diagnóstico visível
     """
     snapshots = []
-    if os.path.isdir(DADOS_DIR):
-        files = [f for f in os.listdir(DADOS_DIR)
-                 if f.lower().endswith((".xlsx", ".xls", ".parquet"))]
-        for fname in files:
-            path = os.path.join(DADOS_DIR, fname)
-            try:
-                if fname.lower().endswith(".parquet"):
-                    df = pd.read_parquet(path)
-                    df = _normalise_base_dados(df) if "SCORE_GERAL" in df.columns else _normalise(df)
+    erros = []
+
+    if not os.path.isdir(DADOS_DIR):
+        erros.append((DADOS_DIR, "Pasta 'dados/' não encontrada no repositório"))
+        return snapshots, erros
+
+    files = [f for f in os.listdir(DADOS_DIR)
+             if f.lower().endswith((".xlsx", ".xls", ".parquet"))
+             and not f.startswith("~") and not f.startswith(".")]
+
+    if not files:
+        erros.append((DADOS_DIR, "Pasta 'dados/' existe mas está vazia (nenhum .xlsx)"))
+        return snapshots, erros
+
+    for fname in files:
+        path = os.path.join(DADOS_DIR, fname)
+        try:
+            if fname.lower().endswith(".parquet"):
+                df = pd.read_parquet(path)
+                df = _normalise_base_dados(df) if "SCORE_GERAL" in df.columns else _normalise(df)
+            else:
+                xls = pd.ExcelFile(path, engine="openpyxl")
+                if "BASE_DADOS" in xls.sheet_names:
+                    df = pd.read_excel(path, sheet_name="BASE_DADOS", engine="openpyxl")
+                    df = _normalise_base_dados(df)
                 else:
-                    xls = pd.ExcelFile(path)
-                    if "BASE_DADOS" in xls.sheet_names:
-                        df = pd.read_excel(path, sheet_name="BASE_DADOS")
-                        df = _normalise_base_dados(df)
-                    else:
-                        sheet = next((s for s in xls.sheet_names
-                                      if "SCORE" in s.upper() and "GERAL" in s.upper()),
-                                     xls.sheet_names[0])
-                        df = pd.read_excel(path, sheet_name=sheet)
-                        df = _normalise(df)
-                ano, mes, label = _parse_month_from_filename(fname)
-                snapshots.append((label, ano, mes, df))
-            except Exception:
-                pass
-    # Ordena cronologicamente (mais antigo → mais novo)
+                    sheet = next((s for s in xls.sheet_names
+                                  if "SCORE" in s.upper() and "GERAL" in s.upper()),
+                                 xls.sheet_names[0])
+                    df = pd.read_excel(path, sheet_name=sheet, engine="openpyxl")
+                    df = _normalise(df)
+
+            if "SCORE_GERAL" not in df.columns or "FORNECEDOR" not in df.columns:
+                erros.append((fname, f"Colunas obrigatórias ausentes. Achei: {list(df.columns)[:6]}"))
+                continue
+
+            ano, mes, label = _parse_month_from_filename(fname)
+            snapshots.append((label, ano, mes, df))
+        except Exception as e:
+            erros.append((fname, f"{type(e).__name__}: {str(e)[:120]}"))
+
     snapshots.sort(key=lambda x: (x[1], x[2]))
-    return snapshots
+    return snapshots, erros
 
 # ─── PERSISTÊNCIA EM SESSÃO (upload temporário / preview) ────────────────────
 # Mantido para preview rápido dentro de uma sessão. NÃO persiste entre reinícios.
@@ -1315,7 +1332,8 @@ def page_atualizar(df: pd.DataFrame):
                 st.rerun()
 
         # Base atual carregada
-        n_meses = len(load_all_snapshots())
+        _snaps, _ = load_all_snapshots()
+        n_meses = len(_snaps)
         meses_txt = f"📅 {n_meses} mês(es) na pasta dados/<br>" if n_meses else "📅 Nenhum mês na pasta dados/ ainda<br>"
         st.html(f"""
         <div style="background:{LGRAY};border-radius:8px;padding:14px 18px;margin-top:16px;border:1px solid {MGRAY};">
@@ -1343,7 +1361,7 @@ def main():
     # ════════════════════════════════════════════════════════════════════
     #  RESOLUÇÃO DE DADOS POR MÊS (snapshots da pasta /dados no GitHub)
     # ════════════════════════════════════════════════════════════════════
-    snapshots = load_all_snapshots()   # [(label, ano, mes, df), ...] cronológico
+    snapshots, erros_snap = load_all_snapshots()   # [(label, ano, mes, df), ...]
 
     df = None
     prev_df = None
@@ -1409,13 +1427,27 @@ def main():
                 st.session_state.sel_month = new_month
                 st.rerun()
 
-    # Banner de dados de demonstração
+    # Banner de dados de demonstração + diagnóstico de erros de leitura
     if "DEMO" in st.session_state.data_info:
         st.warning(
             "⚠️ **Dados de demonstração** — Os nomes de fornecedores são placeholders. "
             "Para dados reais que **persistem para sempre**, crie a pasta `dados/` no GitHub "
             "e envie `2026-05.xlsx` (maio), `2026-06.xlsx` (junho), etc. Veja instruções em **📤 Base**."
         )
+        # Diagnóstico: por que não carregou a pasta dados/?
+        if erros_snap:
+            with st.expander("🔍 Diagnóstico — por que os dados reais não apareceram?", expanded=True):
+                st.markdown("**O app tentou ler a pasta `dados/` e encontrou estes problemas:**")
+                for arquivo, motivo in erros_snap:
+                    st.markdown(f"- `{arquivo}` → {motivo}")
+                st.markdown("---")
+                st.markdown(
+                    "**Causas comuns:**\n"
+                    "- A pasta no GitHub não se chama exatamente `dados` (minúsculo, sem acento)\n"
+                    "- Falta a biblioteca `openpyxl` no `requirements.txt` (atualize-o no GitHub)\n"
+                    "- O arquivo não tem a aba `BASE_DADOS` ou faltam colunas (FORNECEDOR, SCORE_GERAL)\n"
+                    "- O arquivo foi gerado por uma ferramenta diferente do `gerar_mes.py`"
+                )
 
     # Roteamento
     key = st.session_state.page
