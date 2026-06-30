@@ -431,6 +431,85 @@ MESES_PT = {
     7: "Julho", 8: "Agosto", 9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro",
 }
 
+# ─── EQUIPE (lista do login) ─────────────────────────────────────────────────
+EQUIPE = [
+    "Edson Carlos Borges",
+    "Arthur Gabriel Dero",
+    "Tatiana Carvalho de Souza",
+    "Misael Severino",
+    "Alex Sandro Jung",
+    "Nithael Alexandre Krepsky Silveira",
+    "Jair Wermuth",
+    "Rodrigo (Diretor)",
+]
+
+# ─── LOG DE ACESSOS (Google Sheets + fallback em sessão) ─────────────────────
+import datetime as _dt
+
+def _fuso_br():
+    """Horário de Brasília (UTC-3), sem depender de libs externas."""
+    return _dt.datetime.utcnow() - _dt.timedelta(hours=3)
+
+def _get_gsheet():
+    """Conecta ao Google Sheets se a chave estiver nos Secrets. Senão, retorna None."""
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+        if "gcp_service_account" not in st.secrets:
+            return None
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        creds = Credentials.from_service_account_info(
+            dict(st.secrets["gcp_service_account"]), scopes=scopes)
+        gc = gspread.authorize(creds)
+        sheet_id = st.secrets.get("log_sheet_id", "")
+        if not sheet_id:
+            return None
+        sh = gc.open_by_key(sheet_id).sheet1
+        return sh
+    except Exception:
+        return None
+
+def registrar_acesso(nome: str):
+    """Registra um acesso com nome, data e hora. Tenta Google Sheets; senão, sessão."""
+    agora = _fuso_br()
+    data  = agora.strftime("%d/%m/%Y")
+    hora  = agora.strftime("%H:%M:%S")
+
+    # Sempre guarda na sessão (para exibição imediata)
+    if "log_local" not in st.session_state:
+        st.session_state.log_local = []
+    st.session_state.log_local.append({"Nome": nome, "Data": data, "Hora": hora})
+
+    # Tenta persistir no Google Sheets
+    sh = _get_gsheet()
+    if sh is not None:
+        try:
+            # Garante cabeçalho
+            if sh.row_count == 0 or not sh.get_all_values():
+                sh.append_row(["Nome", "Data", "Hora"])
+            sh.append_row([nome, data, hora])
+            st.session_state.log_persistido = True
+        except Exception:
+            st.session_state.log_persistido = False
+    else:
+        st.session_state.log_persistido = False
+
+def carregar_log():
+    """Carrega o log do Google Sheets (se disponível) ou da sessão."""
+    sh = _get_gsheet()
+    if sh is not None:
+        try:
+            rows = sh.get_all_records()
+            if rows:
+                return pd.DataFrame(rows), True
+        except Exception:
+            pass
+    # Fallback: log da sessão
+    local = st.session_state.get("log_local", [])
+    return pd.DataFrame(local), False
+
+
+
 def _parse_month_from_filename(fname: str):
     """Extrai (ano, mes, label) de um nome tipo '2026-05.xlsx' ou '2026-05_maio.xlsx'."""
     import re
@@ -847,14 +926,37 @@ def page_login():
 
     c1, c2, c3 = st.columns([1, 1.25, 1])
     with c2:
+        nome_sel = st.selectbox(
+            "Quem está acessando?",
+            EQUIPE + ["Outro (digitar nome)"],
+            index=None,
+            placeholder="Selecione seu nome...",
+        )
+        nome_livre = ""
+        if nome_sel == "Outro (digitar nome)":
+            nome_livre = st.text_input("Seu nome / cargo",
+                                       placeholder="Ex: Maria — Gerente de Qualidade")
+
         pw = st.text_input("Senha", type="password",
-                           placeholder="Digite a senha de acesso...", label_visibility="collapsed")
+                           placeholder="Digite a senha de acesso...")
+
         if st.button("Entrar no painel", use_container_width=True, type="primary"):
-            if pw == "Acesso2026":
-                st.session_state.authenticated = True
-                st.rerun()
+            # Resolve o nome final
+            if nome_sel == "Outro (digitar nome)":
+                nome_final = nome_livre.strip() or "Outro (não identificado)"
             else:
+                nome_final = nome_sel or ""
+
+            if not nome_sel:
+                st.error("Selecione seu nome antes de entrar.")
+            elif pw != "Acesso2026":
                 st.error("Senha incorreta.")
+            else:
+                registrar_acesso(nome_final)
+                st.session_state.authenticated = True
+                st.session_state.usuario_atual = nome_final
+                st.rerun()
+
         st.markdown(f"""
         <div class="login-badges">
             <span class="login-badge">🏭 200+ fornecedores</span>
@@ -972,7 +1074,7 @@ def show_top_nav(df):
         </div>
     </div>""", unsafe_allow_html=True)
 
-    labels = ["🏠 Geral", "📊 Comprador", "🏭 Fornecedor", "⚠️ Prioritário", "📤 Base"]
+    labels = ["🏠 Geral", "📊 Comprador", "🏭 Fornecedor", "⚠️ Prioritário", "🔑 Acessos"]
     cols = st.columns([1,1,1,1,1,0.6], gap="small")
     for col, label, key in zip(cols[:5], labels, PAGES_KEYS):
         with col:
@@ -1526,8 +1628,80 @@ def page_acao(df: pd.DataFrame):
 # ─── ATUALIZAR BASE ──────────────────────────────────────────────────────────
 
 def page_atualizar(df: pd.DataFrame):
-    st.html(logo_header("Atualizar Base de Dados",
-                        "Fechamento mensal · Persistência permanente via GitHub"))
+    st.html(logo_header("Acessos & Base de Dados",
+                        "Histórico de acessos · Atualização mensal"))
+
+    # ════════════════════════════════════════════════════════════════════
+    #  PAINEL DE ACESSOS
+    # ════════════════════════════════════════════════════════════════════
+    st.markdown('<div class="sec-title">🔑 Histórico de Acessos</div>', unsafe_allow_html=True)
+
+    log_df, persistido = carregar_log()
+
+    if len(log_df) == 0:
+        st.info("Ainda não há acessos registrados nesta base. Os acessos aparecem aqui conforme a equipe entra no site.")
+    else:
+        # Métricas
+        total_acessos = len(log_df)
+        usuarios_unicos = log_df["Nome"].nunique() if "Nome" in log_df.columns else 0
+        # acessos hoje
+        hoje = _fuso_br().strftime("%d/%m/%Y")
+        acessos_hoje = len(log_df[log_df["Data"] == hoje]) if "Data" in log_df.columns else 0
+
+        m1, m2, m3, m4 = st.columns(4)
+        with m1: st.markdown(kpi_card("Total de Acessos", str(total_acessos), "desde o início", NAVY_700), unsafe_allow_html=True)
+        with m2: st.markdown(kpi_card("Pessoas Distintas", str(usuarios_unicos), "nomes diferentes", BAR_BLUE), unsafe_allow_html=True)
+        with m3: st.markdown(kpi_card("Acessos Hoje", str(acessos_hoje), hoje, BAR_GREEN), unsafe_allow_html=True)
+        with m4:
+            top_user = log_df["Nome"].value_counts().index[0] if usuarios_unicos else "—"
+            st.markdown(kpi_card("Mais Ativo", top_user.split()[0] if top_user != "—" else "—",
+                                 f"{log_df['Nome'].value_counts().iloc[0]} acessos" if usuarios_unicos else "", GOLD_500), unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        col_g, col_t = st.columns([1, 1.3], gap="medium")
+
+        with col_g:
+            st.markdown('<div class="sec-title">Acessos por Pessoa</div>', unsafe_allow_html=True)
+            vc = log_df["Nome"].value_counts().reset_index()
+            vc.columns = ["Nome", "Acessos"]
+            vc["short"] = vc["Nome"].apply(lambda x: x.split()[0] if x else "?")
+            fig = go.Figure(go.Bar(
+                x=vc["Acessos"], y=vc["short"], orientation="h",
+                marker=dict(color=NAVY_700, cornerradius=6),
+                text=vc["Acessos"], textposition="outside",
+                textfont=dict(family=PLOTLY_FONT, color=INK),
+                hovertemplate="<b>%{y}</b><br>%{x} acessos<extra></extra>",
+            ))
+            style_fig(fig, height=max(220, len(vc)*34))
+            fig.update_xaxes(showgrid=True, gridcolor="rgba(100,116,139,0.10)")
+            fig.update_yaxes(showgrid=False, autorange="reversed", tickfont=dict(size=10, color=INK))
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col_t:
+            st.markdown('<div class="sec-title">Registros (mais recentes primeiro)</div>', unsafe_allow_html=True)
+            log_show = log_df.iloc[::-1].reset_index(drop=True)
+            st.dataframe(log_show, use_container_width=True, height=max(220, len(vc)*34), hide_index=True)
+
+        # Download Excel
+        import io as _io
+        buf = _io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as w:
+            log_df.to_excel(w, sheet_name="Acessos", index=False)
+        st.download_button("⬇️ Baixar histórico de acessos (Excel)",
+                           buf.getvalue(), "selgron_acessos.xlsx",
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    # Status da persistência
+    if persistido:
+        st.success("✅ Log conectado ao Google Sheets — registros salvos permanentemente.")
+    else:
+        st.warning(
+            "⚠️ **Modo temporário** — o log está sendo guardado só nesta sessão e zera quando o app reinicia. "
+            "Para salvar permanentemente, configure o Google Sheets (instruções no arquivo CONFIGURAR_LOG.md)."
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<div class="sec-title">📤 Atualizar Base Mensal</div>', unsafe_allow_html=True)
 
     left, right = st.columns([1, 1])
 
