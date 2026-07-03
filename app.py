@@ -93,6 +93,37 @@ def score_bar_color(score: float) -> str:
 def pct(v: float) -> str:
     return f"{v * 100:.1f}%"
 
+# ─── AGREGADOS DO SETOR — ponderados por VOLUME ──────────────────────────────
+# Regra: os KPIs de topo (setor/comprador) refletem a TAXA REAL, ponderada pelo
+# volume de entregas — não a média simples entre fornecedores. Isso faz o número
+# reconciliar com a fonte (ex: entregas no prazo ÷ total de entregas).
+# O score INDIVIDUAL de cada fornecedor permanece intacto.
+
+def agg_prazo(df):
+    """Taxa real de entregas no prazo = Σ no_prazo / Σ entregas.
+    Fallback para média simples se as colunas de volume não existirem (dados demo)."""
+    if "NO_PRAZO" not in df.columns or "TOTAL_ENTREGAS" not in df.columns:
+        return df["SCORE_PRAZO"].mean() if "SCORE_PRAZO" in df.columns else 1.0
+    tot = df["TOTAL_ENTREGAS"].sum()
+    if tot == 0:
+        return df["SCORE_PRAZO"].mean() if "SCORE_PRAZO" in df.columns else 1.0
+    return df["NO_PRAZO"].sum() / tot
+
+def agg_qualidade(df):
+    """IQF real = (Σ entregas − Σ NCs) / Σ entregas.
+    Fallback para média simples se as colunas de volume não existirem."""
+    if "TOTAL_ENTREGAS" not in df.columns or "TOTAL_ALERTAS" not in df.columns:
+        return df["SCORE_QUALIDADE"].mean() if "SCORE_QUALIDADE" in df.columns else 1.0
+    tot = df["TOTAL_ENTREGAS"].sum()
+    ncs = df["TOTAL_ALERTAS"].sum()
+    if tot == 0:
+        return df["SCORE_QUALIDADE"].mean() if "SCORE_QUALIDADE" in df.columns else 1.0
+    return max(0.0, (tot - ncs) / tot)
+
+def agg_geral(df):
+    """Score geral do setor = 60% prazo ponderado + 40% qualidade ponderada."""
+    return agg_prazo(df) * PESO_PRAZO + agg_qualidade(df) * PESO_QUAL
+
 def kpi_card(label, value, sub="", color=NAVY):
     sub_html = f"<div class='kpi-sub'>{sub}</div>" if sub else ""
     return f"""<div class="kpi-card">
@@ -1048,7 +1079,7 @@ def show_top_nav(df):
     current = st.session_state.page
 
     n_tot  = len(df)
-    avg    = df["SCORE_GERAL"].mean()
+    avg    = agg_geral(df)
     info   = st.session_state.get("data_info", "")
 
     st.markdown(f"""
@@ -1097,9 +1128,9 @@ def page_dashboard(df: pd.DataFrame):
     st.html(logo_header("Painel Geral de Fornecedores",
                          f"Performance consolidada · {month_label}"))
 
-    avg  = df["SCORE_GERAL"].mean()
-    avgP = df["SCORE_PRAZO"].mean()
-    avgQ = df["SCORE_QUALIDADE"].mean()
+    avg  = agg_geral(df)
+    avgP = agg_prazo(df)
+    avgQ = agg_qualidade(df)
     n_crit = len(df[df["CLASSE"].str.startswith("E")])
     n_atn  = len(df[df["CLASSE"].str.startswith("D")])
     n_exc  = len(df[df["CLASSE"].str.startswith("A")])
@@ -1169,9 +1200,12 @@ def page_dashboard(df: pd.DataFrame):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Score por comprador
-    st.markdown('<div class="sec-title">Score Médio por Comprador</div>', unsafe_allow_html=True)
-    bav = df.groupby("COMPRADOR")["SCORE_GERAL"].mean().sort_values(ascending=False).reset_index()
+    # Score por comprador (ponderado por volume)
+    st.markdown('<div class="sec-title">Score por Comprador (ponderado por volume)</div>', unsafe_allow_html=True)
+    bav = (df.groupby("COMPRADOR")
+             .apply(lambda g: agg_geral(g))
+             .sort_values(ascending=False)
+             .reset_index(name="SCORE_GERAL"))
     bav["first"] = bav["COMPRADOR"].apply(lambda x: x.split()[0])
     fig = go.Figure(go.Bar(
         x=bav["first"], y=bav["SCORE_GERAL"]*100,
@@ -1235,10 +1269,11 @@ def page_por_comprador(df: pd.DataFrame):
     sel = st.selectbox("Selecione o Comprador", buyers, key="comp_sel")
     dfb = df[df["COMPRADOR"] == sel].copy()
 
-    avg  = dfb["SCORE_GERAL"].mean()
-    avgP = dfb["SCORE_PRAZO"].mean()
-    avgQ = dfb["SCORE_QUALIDADE"].mean()
-    ranks = df.groupby("COMPRADOR")["SCORE_GERAL"].mean().sort_values(ascending=False)
+    avg  = agg_geral(dfb)
+    avgP = agg_prazo(dfb)
+    avgQ = agg_qualidade(dfb)
+    ranks = (df.groupby("COMPRADOR").apply(lambda g: agg_geral(g))
+               .sort_values(ascending=False))
     rank  = list(ranks.index).index(sel) + 1
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -1793,7 +1828,7 @@ def page_atualizar(df: pd.DataFrame):
                 {meses_txt}
                 📦 {len(df)} fornecedores<br>
                 👤 {df['COMPRADOR'].nunique()} compradores<br>
-                📈 Score medio: <b>{pct(df['SCORE_GERAL'].mean())}</b><br>
+                📈 Score medio: <b>{pct(agg_geral(df))}</b><br>
                 🔴 Criticos (E): {len(df[df['CLASSE'].str.startswith("E")])}<br>
                 🟠 Atencao (D): {len(df[df['CLASSE'].str.startswith("D")])}
             </div>
