@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+
+# Artefatos transitórios do app (preview em sessão — não devem ser versionados)
+selgron_data.parquet
+selgron_data_info.txt
+
+# Ambiente
+.venv/
+venv/
+.DS_Store
