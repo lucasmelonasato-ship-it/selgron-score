@@ -1392,6 +1392,52 @@ def page_por_comprador(df: pd.DataFrame):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
+    # ── Tendência do comprador (mês a mês) ──
+    _snaps, _ = load_all_snapshots()
+    _labels = [s[0] for s in _snaps]
+    _serie_g, _serie_p, _serie_q = [], [], []
+    for _s in _snaps:
+        _sub = _s[3][_s[3]["COMPRADOR"] == sel]
+        if len(_sub):
+            _serie_g.append(agg_geral(_sub) * 100)
+            _serie_p.append(agg_prazo(_sub) * 100)
+            _serie_q.append(agg_qualidade(_sub) * 100)
+        else:
+            _serie_g.append(None); _serie_p.append(None); _serie_q.append(None)
+
+    _pts = [v for v in _serie_g if v is not None]
+    if len(_pts) >= 2:
+        _delta = _pts[-1] - _pts[-2]
+        if _delta > 0.05:   _arrow, _dc, _dw = "▲", BAR_GREEN, "melhorou"
+        elif _delta < -0.05: _arrow, _dc, _dw = "▼", BAR_RED, "piorou"
+        else:                _arrow, _dc, _dw = "▬", SLATE, "estável"
+        tcol, dcol = st.columns([2.4, 1])
+        with tcol:
+            st.markdown('<div class="sec-title">Tendência do Comprador (mês a mês)</div>', unsafe_allow_html=True)
+            figt = go.Figure()
+            for _serie, _nome, _cor in [(_serie_g, "Geral", NAVY_700),
+                                        (_serie_p, "Prazo", BAR_BLUE),
+                                        (_serie_q, "Qualidade", BAR_GREEN)]:
+                figt.add_trace(go.Scatter(
+                    x=_labels, y=_serie, name=_nome, mode="lines+markers",
+                    line=dict(color=_cor, width=3), marker=dict(size=8, color=_cor),
+                    connectgaps=False,
+                    hovertemplate="<b>%{x}</b><br>" + _nome + ": %{y:.1f}%<extra></extra>"))
+            style_fig(figt, height=240, showlegend=True,
+                      legend_opts=dict(orientation="h", y=1.16, font=dict(size=10)))
+            figt.update_yaxes(range=[0, 112], ticksuffix="%")
+            figt.update_xaxes(tickfont=dict(size=11, color=INK))
+            st.plotly_chart(figt, use_container_width=True)
+        with dcol:
+            st.markdown('<div class="sec-title">vs. mês anterior</div>', unsafe_allow_html=True)
+            st.markdown(f"""
+            <div class="kpi-card" style="margin-top:4px;">
+                <div class="kpi-label">Variação do score geral</div>
+                <div class="kpi-value" style="color:{_dc};">{_arrow} {abs(_delta):.1f} pts</div>
+                <div class="kpi-sub">{sel.split()[0]} <b style="color:{_dc};">{_dw}</b> em relação a {_labels[[i for i,v in enumerate(_serie_g) if v is not None][-2]]}</div>
+            </div>""", unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+
     # Pizza com nomes completos (Ajuste 5)
     col_pie, col_scatter = st.columns(2)
 
