@@ -99,23 +99,39 @@ def pct(v: float) -> str:
 # reconciliar com a fonte (ex: entregas no prazo ÷ total de entregas).
 # O score INDIVIDUAL de cada fornecedor permanece intacto.
 
+def _col_no_prazo(df):
+    """Retorna o nome da coluna de entregas no prazo, seja qual for a variante."""
+    for c in ("NO_PRAZO", "ENTREGA_NO_PRAZO"):
+        if c in df.columns:
+            return c
+    return None
+
+def _col_ncs(df):
+    """Retorna o nome da coluna de NCs, seja qual for a variante."""
+    for c in ("TOTAL_ALERTAS", "TOTAL_NCS"):
+        if c in df.columns:
+            return c
+    return None
+
 def agg_prazo(df):
-    """Taxa real de entregas no prazo = Σ no_prazo / Σ entregas.
-    Fallback para média simples se as colunas de volume não existirem (dados demo)."""
-    if "NO_PRAZO" not in df.columns or "TOTAL_ENTREGAS" not in df.columns:
+    """Taxa real de entregas no prazo = Σ no_prazo / Σ entregas (ponderado por volume).
+    Reconhece NO_PRAZO e ENTREGA_NO_PRAZO. Fallback p/ média simples só sem volume."""
+    col = _col_no_prazo(df)
+    if col is None or "TOTAL_ENTREGAS" not in df.columns:
         return df["SCORE_PRAZO"].mean() if "SCORE_PRAZO" in df.columns else 1.0
     tot = df["TOTAL_ENTREGAS"].sum()
     if tot == 0:
         return df["SCORE_PRAZO"].mean() if "SCORE_PRAZO" in df.columns else 1.0
-    return df["NO_PRAZO"].sum() / tot
+    return df[col].sum() / tot
 
 def agg_qualidade(df):
-    """IQF real = (Σ entregas − Σ NCs) / Σ entregas.
-    Fallback para média simples se as colunas de volume não existirem."""
-    if "TOTAL_ENTREGAS" not in df.columns or "TOTAL_ALERTAS" not in df.columns:
+    """IQF real = (Σ entregas − Σ NCs) / Σ entregas (ponderado por volume).
+    Reconhece TOTAL_ALERTAS e TOTAL_NCS."""
+    col = _col_ncs(df)
+    if "TOTAL_ENTREGAS" not in df.columns or col is None:
         return df["SCORE_QUALIDADE"].mean() if "SCORE_QUALIDADE" in df.columns else 1.0
     tot = df["TOTAL_ENTREGAS"].sum()
-    ncs = df["TOTAL_ALERTAS"].sum()
+    ncs = df[col].sum()
     if tot == 0:
         return df["SCORE_QUALIDADE"].mean() if "SCORE_QUALIDADE" in df.columns else 1.0
     return max(0.0, (tot - ncs) / tot)
@@ -481,8 +497,76 @@ def _fuso_br():
     """Horário de Brasília (UTC-3), sem depender de libs externas."""
     return _dt.datetime.utcnow() - _dt.timedelta(hours=3)
 
+# ═════════════════════════════════════════════════════════════════════════════
+#  LOG DE ACESSOS — persistência em 3 camadas, com degradação graciosa:
+#   1) GitHub (banco permanente via API)  ← recomendado, precisa de 1 token
+#   2) Google Sheets                       ← alternativa
+#   3) Sessão                              ← fallback (temporário, avisa)
+# ═════════════════════════════════════════════════════════════════════════════
+
+LOG_PATH_GH = "dados/_acessos.csv"   # arquivo de log dentro do repositório
+
+def _gh_secrets():
+    """Lê as credenciais do GitHub dos Secrets, se existirem."""
+    try:
+        tok  = st.secrets.get("github_token", "")
+        repo = st.secrets.get("github_repo", "")   # formato: "usuario/repositorio"
+        branch = st.secrets.get("github_branch", "main")
+        if tok and repo:
+            return tok, repo, branch
+    except Exception:
+        pass
+    return None, None, None
+
+def _gh_get_log():
+    """Baixa o CSV de acessos do GitHub. Retorna (df, sha) ou (None, None)."""
+    import base64, requests
+    tok, repo, branch = _gh_secrets()
+    if not tok:
+        return None, None
+    url = f"https://api.github.com/repos/{repo}/contents/{LOG_PATH_GH}"
+    try:
+        r = requests.get(url, headers={"Authorization": f"token {tok}",
+                                       "Accept": "application/vnd.github+json"},
+                         params={"ref": branch}, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            content = base64.b64decode(data["content"]).decode("utf-8")
+            import io as _io
+            df = pd.read_csv(_io.StringIO(content)) if content.strip() else pd.DataFrame(columns=["Nome","Data","Hora"])
+            return df, data["sha"]
+        elif r.status_code == 404:
+            # arquivo ainda não existe → começa vazio
+            return pd.DataFrame(columns=["Nome","Data","Hora"]), None
+    except Exception:
+        pass
+    return None, None
+
+def _gh_put_log(df, sha):
+    """Grava o CSV de acessos no GitHub (cria ou atualiza)."""
+    import base64, requests, json
+    tok, repo, branch = _gh_secrets()
+    if not tok:
+        return False
+    url = f"https://api.github.com/repos/{repo}/contents/{LOG_PATH_GH}"
+    csv_bytes = df.to_csv(index=False).encode("utf-8")
+    payload = {
+        "message": f"log acesso {_fuso_br().strftime('%Y-%m-%d %H:%M:%S')}",
+        "content": base64.b64encode(csv_bytes).decode("utf-8"),
+        "branch": branch,
+    }
+    if sha:
+        payload["sha"] = sha
+    try:
+        r = requests.put(url, headers={"Authorization": f"token {tok}",
+                                       "Accept": "application/vnd.github+json"},
+                         data=json.dumps(payload), timeout=10)
+        return r.status_code in (200, 201)
+    except Exception:
+        return False
+
 def _get_gsheet():
-    """Conecta ao Google Sheets se a chave estiver nos Secrets. Senão, retorna None."""
+    """Conecta ao Google Sheets se a chave estiver nos Secrets. Senão, None."""
     try:
         import gspread
         from google.oauth2.service_account import Credentials
@@ -495,49 +579,69 @@ def _get_gsheet():
         sheet_id = st.secrets.get("log_sheet_id", "")
         if not sheet_id:
             return None
-        sh = gc.open_by_key(sheet_id).sheet1
-        return sh
+        return gc.open_by_key(sheet_id).sheet1
     except Exception:
         return None
 
 def registrar_acesso(nome: str):
-    """Registra um acesso com nome, data e hora. Tenta Google Sheets; senão, sessão."""
+    """Registra acesso (nome, data, hora) com retry seguro contra concorrência."""
     agora = _fuso_br()
-    data  = agora.strftime("%d/%m/%Y")
-    hora  = agora.strftime("%H:%M:%S")
+    reg = {"Nome": nome,
+           "Data": agora.strftime("%d/%m/%Y"),
+           "Hora": agora.strftime("%H:%M:%S")}
 
-    # Sempre guarda na sessão (para exibição imediata)
+    # Sempre guarda na sessão (exibição imediata)
     if "log_local" not in st.session_state:
         st.session_state.log_local = []
-    st.session_state.log_local.append({"Nome": nome, "Data": data, "Hora": hora})
+    st.session_state.log_local.append(reg)
 
-    # Tenta persistir no Google Sheets
+    # 1) GitHub (banco permanente) — com retry contra conflito de escrita
+    tok, _, _ = _gh_secrets()
+    if tok:
+        for _tent in range(3):
+            df, sha = _gh_get_log()
+            if df is None:
+                break
+            df = pd.concat([df, pd.DataFrame([reg])], ignore_index=True)
+            if _gh_put_log(df, sha):
+                st.session_state.log_persistido = "github"
+                return
+        # se falhou após tentativas, cai para próximo
+    # 2) Google Sheets
     sh = _get_gsheet()
     if sh is not None:
         try:
-            # Garante cabeçalho
-            if sh.row_count == 0 or not sh.get_all_values():
+            if not sh.get_all_values():
                 sh.append_row(["Nome", "Data", "Hora"])
-            sh.append_row([nome, data, hora])
-            st.session_state.log_persistido = True
+            sh.append_row([reg["Nome"], reg["Data"], reg["Hora"]])
+            st.session_state.log_persistido = "sheets"
+            return
         except Exception:
-            st.session_state.log_persistido = False
-    else:
-        st.session_state.log_persistido = False
+            pass
+    # 3) Só sessão
+    st.session_state.log_persistido = "sessao"
 
 def carregar_log():
-    """Carrega o log do Google Sheets (se disponível) ou da sessão."""
+    """Carrega o log. Retorna (df, modo) onde modo ∈ {github, sheets, sessao}."""
+    # 1) GitHub
+    tok, _, _ = _gh_secrets()
+    if tok:
+        df, _ = _gh_get_log()
+        if df is not None and len(df) > 0:
+            return df, "github"
+        if df is not None:
+            return df, "github"   # existe mas vazio
+    # 2) Google Sheets
     sh = _get_gsheet()
     if sh is not None:
         try:
             rows = sh.get_all_records()
             if rows:
-                return pd.DataFrame(rows), True
+                return pd.DataFrame(rows), "sheets"
         except Exception:
             pass
-    # Fallback: log da sessão
-    local = st.session_state.get("log_local", [])
-    return pd.DataFrame(local), False
+    # 3) Sessão
+    return pd.DataFrame(st.session_state.get("log_local", [])), "sessao"
 
 
 
@@ -1002,6 +1106,7 @@ def page_login():
 
 PAGES_LIST = [
     "🏠  Painel Geral",
+    "📈  Evolução",
     "📊  Painel Comprador",
     "🏭  Painel Fornecedor",
     "⚠️  Acao Prioritaria",
@@ -1009,6 +1114,7 @@ PAGES_LIST = [
 ]
 PAGES_KEYS = [
     "Painel Geral",
+    "Evolucao",
     "Painel Comprador",
     "Painel Fornecedor",
     "Acao Prioritaria",
@@ -1105,9 +1211,9 @@ def show_top_nav(df):
         </div>
     </div>""", unsafe_allow_html=True)
 
-    labels = ["🏠 Geral", "📊 Comprador", "🏭 Fornecedor", "⚠️ Prioritário", "🔑 Acessos"]
-    cols = st.columns([1,1,1,1,1,0.6], gap="small")
-    for col, label, key in zip(cols[:5], labels, PAGES_KEYS):
+    labels = ["🏠 Geral", "📈 Evolução", "📊 Comprador", "🏭 Fornecedor", "⚠️ Prioritário", "🔑 Acessos"]
+    cols = st.columns([1,1,1,1,1,1,0.6], gap="small")
+    for col, label, key in zip(cols[:6], labels, PAGES_KEYS):
         with col:
             is_active = (current == key)
             btn_style = "primary" if is_active else "secondary"
@@ -1115,7 +1221,7 @@ def show_top_nav(df):
                          type=btn_style, key=f"tnav_{key}"):
                 st.session_state.page = key
                 st.rerun()
-    with cols[5]:
+    with cols[6]:
         if st.button("🚪 Sair", use_container_width=True, key="tnav_sair"):
             st.session_state.authenticated = False
             st.session_state.df = None
@@ -1285,6 +1391,52 @@ def page_por_comprador(df: pd.DataFrame):
     with c5: st.markdown(kpi_card("Ranking", f"#{rank}", f"de {len(buyers)} compradores", GOLD), unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Tendência do comprador (mês a mês) ──
+    _snaps, _ = load_all_snapshots()
+    _labels = [s[0] for s in _snaps]
+    _serie_g, _serie_p, _serie_q = [], [], []
+    for _s in _snaps:
+        _sub = _s[3][_s[3]["COMPRADOR"] == sel]
+        if len(_sub):
+            _serie_g.append(agg_geral(_sub) * 100)
+            _serie_p.append(agg_prazo(_sub) * 100)
+            _serie_q.append(agg_qualidade(_sub) * 100)
+        else:
+            _serie_g.append(None); _serie_p.append(None); _serie_q.append(None)
+
+    _pts = [v for v in _serie_g if v is not None]
+    if len(_pts) >= 2:
+        _delta = _pts[-1] - _pts[-2]
+        if _delta > 0.05:   _arrow, _dc, _dw = "▲", BAR_GREEN, "melhorou"
+        elif _delta < -0.05: _arrow, _dc, _dw = "▼", BAR_RED, "piorou"
+        else:                _arrow, _dc, _dw = "▬", SLATE, "estável"
+        tcol, dcol = st.columns([2.4, 1])
+        with tcol:
+            st.markdown('<div class="sec-title">Tendência do Comprador (mês a mês)</div>', unsafe_allow_html=True)
+            figt = go.Figure()
+            for _serie, _nome, _cor in [(_serie_g, "Geral", NAVY_700),
+                                        (_serie_p, "Prazo", BAR_BLUE),
+                                        (_serie_q, "Qualidade", BAR_GREEN)]:
+                figt.add_trace(go.Scatter(
+                    x=_labels, y=_serie, name=_nome, mode="lines+markers",
+                    line=dict(color=_cor, width=3), marker=dict(size=8, color=_cor),
+                    connectgaps=False,
+                    hovertemplate="<b>%{x}</b><br>" + _nome + ": %{y:.1f}%<extra></extra>"))
+            style_fig(figt, height=240, showlegend=True,
+                      legend_opts=dict(orientation="h", y=1.16, font=dict(size=10)))
+            figt.update_yaxes(range=[0, 112], ticksuffix="%")
+            figt.update_xaxes(tickfont=dict(size=11, color=INK))
+            st.plotly_chart(figt, use_container_width=True)
+        with dcol:
+            st.markdown('<div class="sec-title">vs. mês anterior</div>', unsafe_allow_html=True)
+            st.markdown(f"""
+            <div class="kpi-card" style="margin-top:4px;">
+                <div class="kpi-label">Variação do score geral</div>
+                <div class="kpi-value" style="color:{_dc};">{_arrow} {abs(_delta):.1f} pts</div>
+                <div class="kpi-sub">{sel.split()[0]} <b style="color:{_dc};">{_dw}</b> em relação a {_labels[[i for i,v in enumerate(_serie_g) if v is not None][-2]]}</div>
+            </div>""", unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
 
     # Pizza com nomes completos (Ajuste 5)
     col_pie, col_scatter = st.columns(2)
@@ -1660,6 +1812,236 @@ def page_acao(df: pd.DataFrame):
                                dfs.to_csv(index=False).encode("utf-8"),
                                f"selgron_classe_{tag.lower()}.csv","text/csv")
 
+# ─── EVOLUÇÃO (tendência mês a mês) ──────────────────────────────────────────
+
+def _delta_card(label, value, delta, unidade="pts", sub=""):
+    """Cartão de KPI com seta de variação (verde sobe / vermelho desce)."""
+    if delta is None:
+        arrow, dcolor, dtxt = "", SLATE, "sem mês anterior"
+    elif delta > 0.05:
+        arrow, dcolor, dtxt = "▲", BAR_GREEN, f"+{delta:.1f} {unidade}"
+    elif delta < -0.05:
+        arrow, dcolor, dtxt = "▼", BAR_RED, f"{delta:.1f} {unidade}"
+    else:
+        arrow, dcolor, dtxt = "▬", SLATE, "estável"
+    sub_html = f"<div class='kpi-sub'>{sub}</div>" if sub else ""
+    return f"""<div class="kpi-card">
+        <div class="kpi-label">{label}</div>
+        <div class="kpi-value" style="color:{NAVY_700};">{value}</div>
+        <div style="font-size:0.8rem;font-weight:700;color:{dcolor};margin-top:6px;">{arrow} {dtxt}</div>
+        {sub_html}</div>"""
+
+
+def page_evolucao(df: pd.DataFrame):
+    st.html(logo_header("Evolução",
+                        "Como o setor, cada comprador e cada fornecedor evoluem mês a mês"))
+
+    snapshots, _ = load_all_snapshots()
+
+    if len(snapshots) < 2:
+        st.info(
+            f"📅 A evolução aparece quando há **2 ou mais meses** na pasta `dados/`. "
+            f"Hoje há **{len(snapshots)}**. Suba o próximo fechamento "
+            f"(ex: `2026-07.xlsx`) na pasta `dados/` do GitHub para ver as tendências."
+        )
+        return
+
+    labels = [s[0] for s in snapshots]
+    dfs    = [s[3] for s in snapshots]
+    prev_d, cur_d = dfs[-2], dfs[-1]
+
+    # ════════════════════════════════════════════════════════════════════
+    #  1. SETOR — tendência geral
+    # ════════════════════════════════════════════════════════════════════
+    ger = [agg_geral(d) * 100      for d in dfs]
+    prz = [agg_prazo(d) * 100      for d in dfs]
+    qua = [agg_qualidade(d) * 100  for d in dfs]
+    n_forn = [len(d)               for d in dfs]
+
+    d_ger = ger[-1] - ger[-2]
+    d_prz = prz[-1] - prz[-2]
+    d_qua = qua[-1] - qua[-2]
+    d_forn = n_forn[-1] - n_forn[-2]
+
+    st.markdown(f'<div class="sec-title">Setor · {labels[-2]} → {labels[-1]}</div>',
+                unsafe_allow_html=True)
+    k1, k2, k3, k4 = st.columns(4)
+    with k1: st.markdown(_delta_card("Score Geral", pct(ger[-1]/100), d_ger, sub="Peso 60/40"), unsafe_allow_html=True)
+    with k2: st.markdown(_delta_card("Prazo de Entrega", pct(prz[-1]/100), d_prz, sub="Peso 60%"), unsafe_allow_html=True)
+    with k3: st.markdown(_delta_card("Qualidade", pct(qua[-1]/100), d_qua, sub="Peso 40%"), unsafe_allow_html=True)
+    with k4: st.markdown(_delta_card("Fornecedores", str(n_forn[-1]), float(d_forn), unidade="", sub="na base do mês"), unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<div class="sec-title">Linha do tempo do setor</div>', unsafe_allow_html=True)
+    fig = go.Figure()
+    for serie, nome, cor in [(ger, "Score Geral", NAVY_700),
+                             (prz, "Prazo (60%)", BAR_BLUE),
+                             (qua, "Qualidade (40%)", BAR_GREEN)]:
+        fig.add_trace(go.Scatter(
+            x=labels, y=serie, name=nome, mode="lines+markers+text",
+            line=dict(color=cor, width=3), marker=dict(size=9, color=cor),
+            text=[f"{v:.1f}%" for v in serie], textposition="top center",
+            textfont=dict(size=10, color=cor, family=PLOTLY_FONT),
+            hovertemplate="<b>%{x}</b><br>" + nome + ": %{y:.1f}%<extra></extra>",
+        ))
+    style_fig(fig, height=320, showlegend=True,
+              legend_opts=dict(orientation="h", y=1.12, font=dict(size=11)))
+    fig.update_yaxes(range=[0, 112], ticksuffix="%")
+    fig.update_xaxes(tickfont=dict(size=11, color=INK))
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ════════════════════════════════════════════════════════════════════
+    #  2. COMPRADORES — quem melhorou e quem piorou
+    # ════════════════════════════════════════════════════════════════════
+    st.markdown('<div class="sec-title">Evolução por Comprador</div>', unsafe_allow_html=True)
+
+    buyers = sorted(b for b in set().union(*[set(d["COMPRADOR"].unique()) for d in dfs])
+                    if not str(b).startswith("("))
+    # matriz comprador × mês (score geral ponderado)
+    bmat = {}
+    for b in buyers:
+        row = []
+        for d in dfs:
+            sub = d[d["COMPRADOR"] == b]
+            row.append(agg_geral(sub) * 100 if len(sub) else None)
+        bmat[b] = row
+
+    # variação último vs penúltimo mês (só compradores presentes nos dois)
+    deltas = []
+    for b in buyers:
+        a, c = bmat[b][-2], bmat[b][-1]
+        if a is not None and c is not None:
+            deltas.append((b, c - a, a, c))
+    deltas.sort(key=lambda x: x[1])
+
+    col_bar, col_tab = st.columns([1.15, 1], gap="medium")
+
+    with col_bar:
+        st.markdown(f'<div style="font-size:0.72rem;color:{SLATE};font-weight:600;margin-bottom:6px;">'
+                    f'Variação de score · {labels[-2]} → {labels[-1]}</div>', unsafe_allow_html=True)
+        if deltas:
+            names = [b.split()[0] for b, _, _, _ in deltas]
+            vals  = [round(dlt, 1) for _, dlt, _, _ in deltas]
+            cols_b = [BAR_GREEN if v > 0.05 else (BAR_RED if v < -0.05 else SLATE_2) for v in vals]
+            figb = go.Figure(go.Bar(
+                x=vals, y=names, orientation="h",
+                marker=dict(color=cols_b, cornerradius=6),
+                text=[f"{'+' if v > 0 else ''}{v:.1f}" for v in vals],
+                textposition="outside", textfont=dict(size=11, color=INK, family=PLOTLY_FONT),
+                hovertemplate="<b>%{y}</b><br>Variação: %{x:.1f} pts<extra></extra>",
+            ))
+            style_fig(figb, height=max(240, len(deltas) * 40))
+            figb.add_vline(x=0, line_color="rgba(100,116,139,0.5)", line_width=1)
+            figb.update_xaxes(ticksuffix=" pts", zeroline=False)
+            figb.update_yaxes(showgrid=False, tickfont=dict(size=11, color=INK))
+            st.plotly_chart(figb, use_container_width=True)
+        else:
+            st.caption("Compradores não coincidem entre os dois últimos meses.")
+
+    with col_tab:
+        st.markdown(f'<div style="font-size:0.72rem;color:{SLATE};font-weight:600;margin-bottom:6px;">'
+                    f'Score por comprador em cada mês</div>', unsafe_allow_html=True)
+        tab_rows = []
+        for b in buyers:
+            r = {"Comprador": b.split()[0]}
+            for lbl, v in zip(labels, bmat[b]):
+                r[lbl] = f"{v:.1f}%" if v is not None else "—"
+            tab_rows.append(r)
+        tab_df = pd.DataFrame(tab_rows)
+        # ordena pela coluna do último mês (numérico)
+        tab_df["_ord"] = [bmat[b][-1] if bmat[b][-1] is not None else -1 for b in buyers]
+        tab_df = tab_df.sort_values("_ord", ascending=False).drop(columns="_ord")
+        st.dataframe(tab_df, use_container_width=True, hide_index=True,
+                     height=max(240, len(buyers) * 38))
+
+    # ════════════════════════════════════════════════════════════════════
+    #  3. FORNECEDORES — maiores altas e quedas + trajetória individual
+    # ════════════════════════════════════════════════════════════════════
+    st.markdown('<div class="sec-title">Movimento dos Fornecedores</div>', unsafe_allow_html=True)
+
+    m = pd.merge(
+        cur_d[["FORNECEDOR", "COMPRADOR", "SCORE_GERAL"]],
+        prev_d[["FORNECEDOR", "SCORE_GERAL"]],
+        on="FORNECEDOR", suffixes=("_cur", "_prev"), how="inner",
+    )
+    m["DELTA"] = (m["SCORE_GERAL_cur"] - m["SCORE_GERAL_prev"]) * 100
+
+    n_sobe = int((m["DELTA"] > 0.05).sum())
+    n_desce = int((m["DELTA"] < -0.05).sum())
+    n_estavel = len(m) - n_sobe - n_desce
+    n_novos = cur_d[~cur_d["FORNECEDOR"].isin(prev_d["FORNECEDOR"])].shape[0]
+    n_saiu = prev_d[~prev_d["FORNECEDOR"].isin(cur_d["FORNECEDOR"])].shape[0]
+
+    r1, r2, r3, r4, r5 = st.columns(5)
+    with r1: st.markdown(kpi_card("Melhoraram", str(n_sobe), f"de {len(m)} recorrentes", BAR_GREEN), unsafe_allow_html=True)
+    with r2: st.markdown(kpi_card("Pioraram", str(n_desce), f"de {len(m)} recorrentes", BAR_RED), unsafe_allow_html=True)
+    with r3: st.markdown(kpi_card("Estáveis", str(n_estavel), "±0,05 pt", SLATE), unsafe_allow_html=True)
+    with r4: st.markdown(kpi_card("Novos no mês", str(n_novos), labels[-1], BAR_BLUE), unsafe_allow_html=True)
+    with r5: st.markdown(kpi_card("Sem entrega", str(n_saiu), f"presentes em {labels[-2]}", C_AMBER), unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    col_up, col_down = st.columns(2, gap="medium")
+
+    def _movers_table(dfm, titulo, cor, largest):
+        seg = dfm.nlargest(8, "DELTA") if largest else dfm.nsmallest(8, "DELTA")
+        seg = seg[seg["DELTA"].abs() > 0.05]
+        st.markdown(f'<div style="font-size:0.8rem;font-weight:700;color:{cor};margin-bottom:6px;">{titulo}</div>',
+                    unsafe_allow_html=True)
+        if len(seg) == 0:
+            st.caption("Nenhum fornecedor neste grupo.")
+            return
+        out = pd.DataFrame({
+            "Fornecedor": seg["FORNECEDOR"].apply(lambda x: x[:34]),
+            "Comprador":  seg["COMPRADOR"].apply(lambda x: x.split()[0]),
+            labels[-2]:   seg["SCORE_GERAL_prev"].apply(pct),
+            labels[-1]:   seg["SCORE_GERAL_cur"].apply(pct),
+            "Δ pts":      seg["DELTA"].apply(lambda v: f"{'+' if v > 0 else ''}{v:.1f}"),
+        })
+        st.dataframe(out, use_container_width=True, hide_index=True, height=320)
+
+    with col_up:
+        _movers_table(m, "🟢 Maiores altas", BAR_GREEN, largest=True)
+    with col_down:
+        _movers_table(m, "🔴 Maiores quedas", BAR_RED, largest=False)
+
+    # ── Trajetória individual de um fornecedor ──
+    st.markdown('<div class="sec-title">Trajetória de um Fornecedor</div>', unsafe_allow_html=True)
+    todos_forn = sorted(set().union(*[set(d["FORNECEDOR"].unique()) for d in dfs]))
+    sup = st.selectbox("Selecione o fornecedor", todos_forn, key="evo_sup")
+
+    ser_ger, ser_prz, ser_qua = [], [], []
+    for d in dfs:
+        r = d[d["FORNECEDOR"] == sup]
+        if len(r):
+            ser_ger.append(r.iloc[0]["SCORE_GERAL"] * 100)
+            ser_prz.append(r.iloc[0]["SCORE_PRAZO"] * 100)
+            ser_qua.append(r.iloc[0]["SCORE_QUALIDADE"] * 100)
+        else:
+            ser_ger.append(None); ser_prz.append(None); ser_qua.append(None)
+
+    figs = go.Figure()
+    for serie, nome, cor in [(ser_ger, "Score Geral", NAVY_700),
+                             (ser_prz, "Prazo", BAR_BLUE),
+                             (ser_qua, "Qualidade", BAR_GREEN)]:
+        figs.add_trace(go.Scatter(
+            x=labels, y=serie, name=nome, mode="lines+markers",
+            line=dict(color=cor, width=3), marker=dict(size=9, color=cor),
+            connectgaps=False,
+            hovertemplate="<b>%{x}</b><br>" + nome + ": %{y:.1f}%<extra></extra>",
+        ))
+    style_fig(figs, height=300, showlegend=True,
+              legend_opts=dict(orientation="h", y=1.14, font=dict(size=11)))
+    figs.update_yaxes(range=[0, 112], ticksuffix="%")
+    figs.update_xaxes(tickfont=dict(size=11, color=INK))
+    st.plotly_chart(figs, use_container_width=True)
+
+    st.download_button(
+        "⬇️ Exportar movimento dos fornecedores (.csv)",
+        m.sort_values("DELTA", ascending=False).to_csv(index=False).encode("utf-8"),
+        "selgron_evolucao_fornecedores.csv", "text/csv",
+    )
+
+
 # ─── ATUALIZAR BASE ──────────────────────────────────────────────────────────
 
 def page_atualizar(df: pd.DataFrame):
@@ -1727,12 +2109,15 @@ def page_atualizar(df: pd.DataFrame):
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     # Status da persistência
-    if persistido:
-        st.success("✅ Log conectado ao Google Sheets — registros salvos permanentemente.")
+    if persistido == "github":
+        st.success("✅ Log conectado ao **GitHub** — registros salvos permanentemente no repositório.")
+    elif persistido == "sheets":
+        st.success("✅ Log conectado ao **Google Sheets** — registros salvos permanentemente.")
     else:
         st.warning(
             "⚠️ **Modo temporário** — o log está sendo guardado só nesta sessão e zera quando o app reinicia. "
-            "Para salvar permanentemente, configure o Google Sheets (instruções no arquivo CONFIGURAR_LOG.md)."
+            "Para salvar permanentemente, configure o GitHub (instruções no arquivo CONFIGURAR_LOG.md) — "
+            "leva 2 minutos e resolve de vez."
         )
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -1935,6 +2320,7 @@ def main():
     # Roteamento
     key = st.session_state.page
     if   key == "Painel Geral":      page_dashboard(df)
+    elif key == "Evolucao":          page_evolucao(df)
     elif key == "Painel Comprador":  page_por_comprador(df)
     elif key == "Painel Fornecedor": page_ficha(df)
     elif key == "Acao Prioritaria":  page_acao(df)

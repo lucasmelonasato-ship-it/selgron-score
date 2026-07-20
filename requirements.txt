@@ -7,3 +7,4 @@ xlrd>=2.0.1
 pyarrow>=14.0.0
 gspread>=6.0.0
 google-auth>=2.27.0
+requests>=2.31.0
