@@ -1817,7 +1817,7 @@ def page_acao(df: pd.DataFrame):
 def _delta_card(label, value, delta, unidade="pts", sub=""):
     """Cartão de KPI com seta de variação (verde sobe / vermelho desce)."""
     if delta is None:
-        arrow, dcolor, dtxt = "", SLATE, "sem mês anterior"
+        arrow, dcolor, dtxt = "", SLATE, "sem comparação"
     elif delta > 0.05:
         arrow, dcolor, dtxt = "▲", BAR_GREEN, f"+{delta:.1f} {unidade}"
     elif delta < -0.05:
@@ -1832,9 +1832,17 @@ def _delta_card(label, value, delta, unidade="pts", sub=""):
         {sub_html}</div>"""
 
 
+def _seta_delta(v):
+    """(texto, cor) para uma variação em pontos."""
+    if v is None:       return "—", SLATE
+    if v > 0.05:        return f"▲ +{v:.1f}", BAR_GREEN
+    if v < -0.05:       return f"▼ {v:.1f}", BAR_RED
+    return "▬ 0,0", SLATE
+
+
 def page_evolucao(df: pd.DataFrame):
     st.html(logo_header("Evolução",
-                        "Como o setor, cada comprador e cada fornecedor evoluem mês a mês"))
+                        "Panorama mês a mês · setor, compradores e fornecedores"))
 
     snapshots, _ = load_all_snapshots()
 
@@ -1848,31 +1856,46 @@ def page_evolucao(df: pd.DataFrame):
 
     labels = [s[0] for s in snapshots]
     dfs    = [s[3] for s in snapshots]
-    prev_d, cur_d = dfs[-2], dfs[-1]
+
+    # Mapa fornecedor → score geral (%) por mês (usado nas tabelas de trajetória)
+    todos_forn = sorted(set().union(*[set(d["FORNECEDOR"].unique()) for d in dfs]))
+    score_map = {n: [None] * len(dfs) for n in todos_forn}
+    comp_map  = {}
+    for i, d in enumerate(dfs):
+        for _, r in d.iterrows():
+            score_map[r["FORNECEDOR"]][i] = r["SCORE_GERAL"] * 100
+            comp_map[r["FORNECEDOR"]] = r["COMPRADOR"]   # comprador mais recente vence
+
+    # ── Janela de comparação (De → Até). Default: primeiro → último. ──
+    js1, js2, _ = st.columns([1, 1, 2])
+    with js1:
+        de_lbl = st.selectbox("📅 Comparar de", labels, index=0, key="evo_de")
+    with js2:
+        ate_lbl = st.selectbox("até", labels, index=len(labels) - 1, key="evo_ate")
+    i_de, i_ate = labels.index(de_lbl), labels.index(ate_lbl)
+    if i_de >= i_ate:
+        i_de = max(0, i_ate - 1)
+        st.caption(f"⚠️ 'De' deve ser anterior a 'até' — usando **{labels[i_de]} → {labels[i_ate]}**.")
+    base_d, cur_d = dfs[i_de], dfs[i_ate]
+    periodo = f"{labels[i_de]} → {labels[i_ate]}"
 
     # ════════════════════════════════════════════════════════════════════
-    #  1. SETOR — tendência geral
+    #  1. SETOR — panorama do período
     # ════════════════════════════════════════════════════════════════════
     ger = [agg_geral(d) * 100      for d in dfs]
     prz = [agg_prazo(d) * 100      for d in dfs]
     qua = [agg_qualidade(d) * 100  for d in dfs]
     n_forn = [len(d)               for d in dfs]
 
-    d_ger = ger[-1] - ger[-2]
-    d_prz = prz[-1] - prz[-2]
-    d_qua = qua[-1] - qua[-2]
-    d_forn = n_forn[-1] - n_forn[-2]
-
-    st.markdown(f'<div class="sec-title">Setor · {labels[-2]} → {labels[-1]}</div>',
-                unsafe_allow_html=True)
+    st.markdown(f'<div class="sec-title">Setor · {periodo}</div>', unsafe_allow_html=True)
     k1, k2, k3, k4 = st.columns(4)
-    with k1: st.markdown(_delta_card("Score Geral", pct(ger[-1]/100), d_ger, sub="Peso 60/40"), unsafe_allow_html=True)
-    with k2: st.markdown(_delta_card("Prazo de Entrega", pct(prz[-1]/100), d_prz, sub="Peso 60%"), unsafe_allow_html=True)
-    with k3: st.markdown(_delta_card("Qualidade", pct(qua[-1]/100), d_qua, sub="Peso 40%"), unsafe_allow_html=True)
-    with k4: st.markdown(_delta_card("Fornecedores", str(n_forn[-1]), float(d_forn), unidade="", sub="na base do mês"), unsafe_allow_html=True)
+    with k1: st.markdown(_delta_card("Score Geral", pct(ger[i_ate]/100), ger[i_ate]-ger[i_de], sub="Peso 60/40"), unsafe_allow_html=True)
+    with k2: st.markdown(_delta_card("Prazo de Entrega", pct(prz[i_ate]/100), prz[i_ate]-prz[i_de], sub="Peso 60%"), unsafe_allow_html=True)
+    with k3: st.markdown(_delta_card("Qualidade", pct(qua[i_ate]/100), qua[i_ate]-qua[i_de], sub="Peso 40%"), unsafe_allow_html=True)
+    with k4: st.markdown(_delta_card("Fornecedores", str(n_forn[i_ate]), float(n_forn[i_ate]-n_forn[i_de]), unidade="", sub="na base do mês"), unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown('<div class="sec-title">Linha do tempo do setor</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec-title">Linha do tempo do setor (todos os meses)</div>', unsafe_allow_html=True)
     fig = go.Figure()
     for serie, nome, cor in [(ger, "Score Geral", NAVY_700),
                              (prz, "Prazo (60%)", BAR_BLUE),
@@ -1884,44 +1907,38 @@ def page_evolucao(df: pd.DataFrame):
             textfont=dict(size=10, color=cor, family=PLOTLY_FONT),
             hovertemplate="<b>%{x}</b><br>" + nome + ": %{y:.1f}%<extra></extra>",
         ))
-    style_fig(fig, height=320, showlegend=True,
+    style_fig(fig, height=330, showlegend=True,
               legend_opts=dict(orientation="h", y=1.12, font=dict(size=11)))
     fig.update_yaxes(range=[0, 112], ticksuffix="%")
     fig.update_xaxes(tickfont=dict(size=11, color=INK))
     st.plotly_chart(fig, use_container_width=True)
 
     # ════════════════════════════════════════════════════════════════════
-    #  2. COMPRADORES — quem melhorou e quem piorou
+    #  2. COMPRADORES — evolução no período
     # ════════════════════════════════════════════════════════════════════
     st.markdown('<div class="sec-title">Evolução por Comprador</div>', unsafe_allow_html=True)
 
     buyers = sorted(b for b in set().union(*[set(d["COMPRADOR"].unique()) for d in dfs])
                     if not str(b).startswith("("))
-    # matriz comprador × mês (score geral ponderado)
     bmat = {}
     for b in buyers:
-        row = []
-        for d in dfs:
-            sub = d[d["COMPRADOR"] == b]
-            row.append(agg_geral(sub) * 100 if len(sub) else None)
-        bmat[b] = row
+        bmat[b] = [agg_geral(d[d["COMPRADOR"] == b]) * 100 if len(d[d["COMPRADOR"] == b]) else None
+                   for d in dfs]
 
-    # variação último vs penúltimo mês (só compradores presentes nos dois)
     deltas = []
     for b in buyers:
-        a, c = bmat[b][-2], bmat[b][-1]
+        a, c = bmat[b][i_de], bmat[b][i_ate]
         if a is not None and c is not None:
-            deltas.append((b, c - a, a, c))
+            deltas.append((b, c - a))
     deltas.sort(key=lambda x: x[1])
 
     col_bar, col_tab = st.columns([1.15, 1], gap="medium")
-
     with col_bar:
         st.markdown(f'<div style="font-size:0.72rem;color:{SLATE};font-weight:600;margin-bottom:6px;">'
-                    f'Variação de score · {labels[-2]} → {labels[-1]}</div>', unsafe_allow_html=True)
+                    f'Variação de score · {periodo}</div>', unsafe_allow_html=True)
         if deltas:
-            names = [b.split()[0] for b, _, _, _ in deltas]
-            vals  = [round(dlt, 1) for _, dlt, _, _ in deltas]
+            names = [b.split()[0] for b, _ in deltas]
+            vals  = [round(dlt, 1) for _, dlt in deltas]
             cols_b = [BAR_GREEN if v > 0.05 else (BAR_RED if v < -0.05 else SLATE_2) for v in vals]
             figb = go.Figure(go.Bar(
                 x=vals, y=names, orientation="h",
@@ -1936,7 +1953,7 @@ def page_evolucao(df: pd.DataFrame):
             figb.update_yaxes(showgrid=False, tickfont=dict(size=11, color=INK))
             st.plotly_chart(figb, use_container_width=True)
         else:
-            st.caption("Compradores não coincidem entre os dois últimos meses.")
+            st.caption("Compradores não coincidem entre os meses escolhidos.")
 
     with col_tab:
         st.markdown(f'<div style="font-size:0.72rem;color:{SLATE};font-weight:600;margin-bottom:6px;">'
@@ -1946,69 +1963,92 @@ def page_evolucao(df: pd.DataFrame):
             r = {"Comprador": b.split()[0]}
             for lbl, v in zip(labels, bmat[b]):
                 r[lbl] = f"{v:.1f}%" if v is not None else "—"
+            d_win = (bmat[b][i_ate] - bmat[b][i_de]) if (bmat[b][i_ate] is not None and bmat[b][i_de] is not None) else None
+            r["Δ período"] = _seta_delta(d_win)[0]
             tab_rows.append(r)
         tab_df = pd.DataFrame(tab_rows)
-        # ordena pela coluna do último mês (numérico)
-        tab_df["_ord"] = [bmat[b][-1] if bmat[b][-1] is not None else -1 for b in buyers]
+        tab_df["_ord"] = [bmat[b][i_ate] if bmat[b][i_ate] is not None else -1 for b in buyers]
         tab_df = tab_df.sort_values("_ord", ascending=False).drop(columns="_ord")
         st.dataframe(tab_df, use_container_width=True, hide_index=True,
                      height=max(240, len(buyers) * 38))
 
     # ════════════════════════════════════════════════════════════════════
-    #  3. FORNECEDORES — maiores altas e quedas + trajetória individual
+    #  3. FORNECEDORES — movimento no período
     # ════════════════════════════════════════════════════════════════════
-    st.markdown('<div class="sec-title">Movimento dos Fornecedores</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="sec-title">Movimento dos Fornecedores · {periodo}</div>', unsafe_allow_html=True)
 
     m = pd.merge(
         cur_d[["FORNECEDOR", "COMPRADOR", "SCORE_GERAL"]],
-        prev_d[["FORNECEDOR", "SCORE_GERAL"]],
-        on="FORNECEDOR", suffixes=("_cur", "_prev"), how="inner",
+        base_d[["FORNECEDOR", "SCORE_GERAL"]],
+        on="FORNECEDOR", suffixes=("_cur", "_base"), how="inner",
     )
-    m["DELTA"] = (m["SCORE_GERAL_cur"] - m["SCORE_GERAL_prev"]) * 100
+    m["DELTA"] = (m["SCORE_GERAL_cur"] - m["SCORE_GERAL_base"]) * 100
 
-    n_sobe = int((m["DELTA"] > 0.05).sum())
-    n_desce = int((m["DELTA"] < -0.05).sum())
+    n_sobe    = int((m["DELTA"] > 0.05).sum())
+    n_desce   = int((m["DELTA"] < -0.05).sum())
     n_estavel = len(m) - n_sobe - n_desce
-    n_novos = cur_d[~cur_d["FORNECEDOR"].isin(prev_d["FORNECEDOR"])].shape[0]
-    n_saiu = prev_d[~prev_d["FORNECEDOR"].isin(cur_d["FORNECEDOR"])].shape[0]
+    n_novos   = cur_d[~cur_d["FORNECEDOR"].isin(base_d["FORNECEDOR"])].shape[0]
+    n_saiu    = base_d[~base_d["FORNECEDOR"].isin(cur_d["FORNECEDOR"])].shape[0]
 
     r1, r2, r3, r4, r5 = st.columns(5)
     with r1: st.markdown(kpi_card("Melhoraram", str(n_sobe), f"de {len(m)} recorrentes", BAR_GREEN), unsafe_allow_html=True)
     with r2: st.markdown(kpi_card("Pioraram", str(n_desce), f"de {len(m)} recorrentes", BAR_RED), unsafe_allow_html=True)
     with r3: st.markdown(kpi_card("Estáveis", str(n_estavel), "±0,05 pt", SLATE), unsafe_allow_html=True)
-    with r4: st.markdown(kpi_card("Novos no mês", str(n_novos), labels[-1], BAR_BLUE), unsafe_allow_html=True)
-    with r5: st.markdown(kpi_card("Sem entrega", str(n_saiu), f"presentes em {labels[-2]}", C_AMBER), unsafe_allow_html=True)
+    with r4: st.markdown(kpi_card("Novos", str(n_novos), f"entraram até {labels[i_ate]}", BAR_BLUE), unsafe_allow_html=True)
+    with r5: st.markdown(kpi_card("Sem entrega", str(n_saiu), f"sumiram desde {labels[i_de]}", C_AMBER), unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
+
+    def _tabela_trajetoria(nomes, cor, ascending_delta):
+        """Tabela com score de cada mês + Δ do período para uma lista de fornecedores."""
+        rows = []
+        for nome in nomes:
+            row = {"Fornecedor": nome[:32], "Comprador": comp_map.get(nome, "").split()[0]}
+            for lbl, v in zip(labels, score_map[nome]):
+                row[lbl] = f"{v:.1f}%" if v is not None else "—"
+            a, c = score_map[nome][i_de], score_map[nome][i_ate]
+            row["Δ período"] = _seta_delta((c - a) if (a is not None and c is not None) else None)[0]
+            rows.append(row)
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True, height=330)
+
     col_up, col_down = st.columns(2, gap="medium")
-
-    def _movers_table(dfm, titulo, cor, largest):
-        seg = dfm.nlargest(8, "DELTA") if largest else dfm.nsmallest(8, "DELTA")
-        seg = seg[seg["DELTA"].abs() > 0.05]
-        st.markdown(f'<div style="font-size:0.8rem;font-weight:700;color:{cor};margin-bottom:6px;">{titulo}</div>',
-                    unsafe_allow_html=True)
-        if len(seg) == 0:
-            st.caption("Nenhum fornecedor neste grupo.")
-            return
-        out = pd.DataFrame({
-            "Fornecedor": seg["FORNECEDOR"].apply(lambda x: x[:34]),
-            "Comprador":  seg["COMPRADOR"].apply(lambda x: x.split()[0]),
-            labels[-2]:   seg["SCORE_GERAL_prev"].apply(pct),
-            labels[-1]:   seg["SCORE_GERAL_cur"].apply(pct),
-            "Δ pts":      seg["DELTA"].apply(lambda v: f"{'+' if v > 0 else ''}{v:.1f}"),
-        })
-        st.dataframe(out, use_container_width=True, hide_index=True, height=320)
-
     with col_up:
-        _movers_table(m, "🟢 Maiores altas", BAR_GREEN, largest=True)
+        st.markdown(f'<div style="font-size:0.85rem;font-weight:700;color:{BAR_GREEN};margin-bottom:6px;">'
+                    f'🟢 Fornecedores que mais evoluíram</div>', unsafe_allow_html=True)
+        seg = m[m["DELTA"] > 0.05].nlargest(10, "DELTA")
+        if len(seg): _tabela_trajetoria(seg["FORNECEDOR"].tolist(), BAR_GREEN, False)
+        else: st.caption("Nenhum fornecedor melhorou no período.")
     with col_down:
-        _movers_table(m, "🔴 Maiores quedas", BAR_RED, largest=False)
+        st.markdown(f'<div style="font-size:0.85rem;font-weight:700;color:{BAR_RED};margin-bottom:6px;">'
+                    f'🔴 Fornecedores que mais pioraram</div>', unsafe_allow_html=True)
+        seg = m[m["DELTA"] < -0.05].nsmallest(10, "DELTA")
+        if len(seg): _tabela_trajetoria(seg["FORNECEDOR"].tolist(), BAR_RED, True)
+        else: st.caption("Nenhum fornecedor piorou no período.")
 
-    # ── Trajetória individual de um fornecedor ──
+    # ════════════════════════════════════════════════════════════════════
+    #  4. PIORES FORNECEDORES HOJE (mês final da janela)
+    # ════════════════════════════════════════════════════════════════════
+    st.markdown(f'<div class="sec-title">Piores Fornecedores em {labels[i_ate]} · e como chegaram lá</div>',
+                unsafe_allow_html=True)
+    piores = cur_d.nsmallest(12, "SCORE_GERAL")["FORNECEDOR"].tolist()
+    rows = []
+    for nome in piores:
+        row = {"Fornecedor": nome[:32], "Comprador": comp_map.get(nome, "").split()[0]}
+        for lbl, v in zip(labels, score_map[nome]):
+            row[lbl] = f"{v:.1f}%" if v is not None else "—"
+        a, c = score_map[nome][i_de], score_map[nome][i_ate]
+        d_win = (c - a) if (a is not None and c is not None) else None
+        row["Tendência"] = _seta_delta(d_win)[0]
+        rows.append(row)
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True, height=460)
+    st.caption("Ordenado do pior para o menos pior no mês final. A coluna Tendência mostra se ele vem "
+               "melhorando (▲) ou afundando (▼) dentro do período escolhido.")
+
+    # ════════════════════════════════════════════════════════════════════
+    #  5. TRAJETÓRIA INDIVIDUAL
+    # ════════════════════════════════════════════════════════════════════
     st.markdown('<div class="sec-title">Trajetória de um Fornecedor</div>', unsafe_allow_html=True)
-    todos_forn = sorted(set().union(*[set(d["FORNECEDOR"].unique()) for d in dfs]))
     sup = st.selectbox("Selecione o fornecedor", todos_forn, key="evo_sup")
-
     ser_ger, ser_prz, ser_qua = [], [], []
     for d in dfs:
         r = d[d["FORNECEDOR"] == sup]
@@ -2018,7 +2058,6 @@ def page_evolucao(df: pd.DataFrame):
             ser_qua.append(r.iloc[0]["SCORE_QUALIDADE"] * 100)
         else:
             ser_ger.append(None); ser_prz.append(None); ser_qua.append(None)
-
     figs = go.Figure()
     for serie, nome, cor in [(ser_ger, "Score Geral", NAVY_700),
                              (ser_prz, "Prazo", BAR_BLUE),

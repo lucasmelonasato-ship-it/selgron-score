@@ -85,9 +85,12 @@ permanece intacto.
 ## Páginas do painel
 
 1. **🏠 Painel Geral** — saúde do setor, ranking completo, distribuição por classe.
-2. **📈 Evolução** — tendência mês a mês do setor, de cada comprador e de cada
-   fornecedor (maiores altas e quedas, trajetória individual). *Aparece a partir
-   de 2 meses na pasta `dados/`.*
+2. **📈 Evolução** — dashboard mês a mês com **janela de comparação** (de/até):
+   panorama do setor, evolução por comprador, **fornecedores que mais evoluíram**,
+   **que mais pioraram**, **piores fornecedores do mês** (com a trajetória de como
+   chegaram lá) e trajetória individual. Escala automaticamente para 3+ meses —
+   basta subir `2026-07.xlsx`, `2026-08.xlsx`… na pasta `dados/`. *Aparece a
+   partir de 2 meses.*
 3. **📊 Painel Comprador** — carteira individual, prazo × qualidade, ranking.
 4. **🏭 Painel Fornecedor** — ficha individual + variação vs. mês anterior.
 5. **⚠️ Ação Prioritária** — fornecedores Classe D e E por comprador.
