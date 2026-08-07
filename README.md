@@ -84,7 +84,11 @@ permanece intacto.
 
 ## Páginas do painel
 
-1. **🏠 Painel Geral** — saúde do setor, ranking completo, distribuição por classe.
+1. **🏠 Painel Geral** — saúde do setor, ranking completo, distribuição por classe
+   e **volumetria + Curva ABC**: valor total comprado, classificação A/B/C por valor
+   (Pareto: A até 80% do valor, B até 95%, C o resto), com filtro por curva e
+   ordenação do maior valor para o menor. Ao filtrar a Curva A, aparecem só os
+   fornecedores de maior valor — com o ranking e a classe de score de cada um.
 2. **📈 Evolução** — dashboard mês a mês com **janela de comparação** (de/até):
    panorama do setor, evolução por comprador, **fornecedores que mais evoluíram**,
    **que mais pioraram**, **piores fornecedores do mês** (com a trajetória de como
