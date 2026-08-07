@@ -93,6 +93,56 @@ def score_bar_color(score: float) -> str:
 def pct(v: float) -> str:
     return f"{v * 100:.1f}%"
 
+# ─── VOLUMETRIA & CURVA ABC (por valor comprado) ─────────────────────────────
+# Curva ABC clássica (Pareto): ordena por valor comprado e classifica pelo valor
+# ACUMULADO — A até 80% do valor, B até 95%, C o restante. O maior fornecedor é
+# sempre A. Calculada por mês (cada fechamento tem sua própria distribuição).
+ABC_A, ABC_B = 0.80, 0.95
+ABC_INFO = {
+    "A": dict(cor="#1E2761", bg="#E3E7F5", label="A", desc="alto valor"),
+    "B": dict(cor="#2980B9", bg="#DDEEFF", label="B", desc="valor médio"),
+    "C": dict(cor="#64748B", bg="#EEF1F5", label="C", desc="baixo valor"),
+    "—": dict(cor="#94A3B8", bg="#F1F5F9", label="—", desc="sem valor"),
+}
+
+def add_curva_abc(df: pd.DataFrame) -> pd.DataFrame:
+    """Adiciona CURVA_ABC ('A'/'B'/'C') e VALOR_PCT (participação no valor total)."""
+    df = df.copy()
+    val = pd.to_numeric(df.get("VALOR_NF"), errors="coerce").fillna(0) if "VALOR_NF" in df.columns else None
+    if val is None or val.sum() <= 0:
+        df["CURVA_ABC"] = "—"
+        df["VALOR_PCT"] = 0.0
+        return df
+    order = val.sort_values(ascending=False)
+    total = order.sum()
+    acum_prev = (order.cumsum() - order) / total   # acumulado ANTES deste item
+    curva = acum_prev.apply(lambda a: "A" if a < ABC_A else ("B" if a < ABC_B else "C"))
+    df["VALOR_PCT"] = val / total
+    df["CURVA_ABC"] = curva                          # alinha pelo índice
+    return df
+
+def fmt_valor(v) -> str:
+    """Valor em R$ compacto (mi / mil), no padrão brasileiro."""
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return "—"
+    if v <= 0:
+        return "—"
+    if v >= 1_000_000:
+        return f"R$ {v/1_000_000:.1f} mi".replace(".", ",")
+    if v >= 1_000:
+        return f"R$ {v/1_000:.0f} mil"
+    return f"R$ {v:.0f}"
+
+def fmt_valor_full(v) -> str:
+    """Valor em R$ por extenso com separador de milhar brasileiro."""
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return "R$ 0"
+    return "R$ " + f"{v:,.2f}".replace(",", "§").replace(".", ",").replace("§", ".")
+
 # ─── AGREGADOS DO SETOR — ponderados por VOLUME ──────────────────────────────
 # Regra: os KPIs de topo (setor/comprador) refletem a TAXA REAL, ponderada pelo
 # volume de entregas — não a média simples entre fornecedores. Isso faz o número
@@ -797,6 +847,7 @@ def _sample_data() -> pd.DataFrame:
     df["CLASSE"] = df["SCORE_GERAL"].apply(get_class)
     df = df.sort_values("SCORE_GERAL", ascending=False).reset_index(drop=True)
     df["RANK"] = range(1, len(df) + 1)
+    df = add_curva_abc(df)
     return df
 
 # ─── NORMALISE ────────────────────────────────────────────────────────────────
@@ -827,6 +878,7 @@ def _normalise(df: pd.DataFrame) -> pd.DataFrame:
         df["CLASSE"] = df["CLASSE"].apply(normalise_class)
     df = df.sort_values("SCORE_GERAL", ascending=False).reset_index(drop=True)
     df["RANK"] = range(1, len(df) + 1)
+    df = add_curva_abc(df)
     return df
 
 def _process_raw_prazo(file) -> pd.DataFrame:
@@ -872,6 +924,7 @@ def _normalise_base_dados(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.sort_values("SCORE_GERAL", ascending=False).reset_index(drop=True)
     df["RANK"] = range(1, len(df) + 1)
+    df = add_curva_abc(df)
     return df
 
 
@@ -954,6 +1007,9 @@ def ranking_table_html(df_show: pd.DataFrame) -> str:
         rank = int(row["RANK"])
         ent  = int(row["TOTAL_ENTREGAS"])
         ncs  = int(row["TOTAL_NCS"])
+        valor = fmt_valor(row.get("VALOR_NF", 0))
+        abc   = str(row.get("CURVA_ABC", "—"))
+        ai    = ABC_INFO.get(abc, ABC_INFO["—"])
 
         rows_html += f"""
         <tr style="background:{bg};">
@@ -965,6 +1021,9 @@ def ranking_table_html(df_show: pd.DataFrame) -> str:
             <td class="pct" style="color:{BAR_GREEN};">{sq:.1f}%</td>
             <td class="num" style="color:{DGRAY};">{ent}</td>
             <td class="num" style="color:{'#C00000' if ncs > 0 else BAR_GREEN};">{ncs}</td>
+            <td style="text-align:right;color:{INK};font-weight:600;font-size:0.78rem;white-space:nowrap;">{valor}</td>
+            <td class="num"><span style="background:{ai['bg']};color:{ai['cor']};font-weight:800;
+                font-size:0.72rem;padding:2px 9px;border-radius:20px;">{ai['label']}</span></td>
             <td class="num">{emj} <span style="color:{tc};font-weight:700;font-size:0.72rem;">{cc['label']}</span></td>
         </tr>"""
 
@@ -981,6 +1040,8 @@ def ranking_table_html(df_show: pd.DataFrame) -> str:
                 <th class="pct">Qualidade</th>
                 <th class="num">Entregas</th>
                 <th class="num">NCs</th>
+                <th style="text-align:right;">Valor comprado</th>
+                <th class="num">ABC</th>
                 <th>Classe</th>
             </tr>
         </thead>
@@ -1329,10 +1390,45 @@ def page_dashboard(df: pd.DataFrame):
     fig.update_xaxes(tickfont=dict(size=11, color=INK))
     st.plotly_chart(fig, use_container_width=True)
 
+    # ── Volumetria & Curva ABC (por valor comprado) ──
+    total_val   = float(pd.to_numeric(df.get("VALOR_NF", 0), errors="coerce").fillna(0).sum())
+    total_ent   = int(df["TOTAL_ENTREGAS"].sum())
+    n_com_valor = int((pd.to_numeric(df.get("VALOR_NF", 0), errors="coerce").fillna(0) > 0).sum())
+    if total_val > 0:
+        st.markdown('<div class="sec-title">Volumetria & Curva ABC (por valor comprado)</div>', unsafe_allow_html=True)
+        vk1, vk2, vk3, vk4 = st.columns(4)
+        with vk1: st.markdown(kpi_card("Valor Total Comprado", fmt_valor(total_val), fmt_valor_full(total_val), NAVY_700), unsafe_allow_html=True)
+        with vk2: st.markdown(kpi_card("Entregas no Período", f"{total_ent:,}".replace(",", "."), "linhas de entrega", BAR_BLUE), unsafe_allow_html=True)
+        with vk3: st.markdown(kpi_card("Fornecedores c/ Compra", str(n_com_valor), f"de {len(df)} na base", BAR_GREEN), unsafe_allow_html=True)
+        n_a = int((df["CURVA_ABC"] == "A").sum())
+        with vk4: st.markdown(kpi_card("Fornecedores Curva A", str(n_a), "concentram ~80% do valor", GOLD_500), unsafe_allow_html=True)
+
+        # Barra segmentada A/B/C por participação de valor
+        abc_val = df.groupby("CURVA_ABC")["VALOR_NF"].sum()
+        abc_cnt = df["CURVA_ABC"].value_counts()
+        seg, cards = "", ""
+        for c in ["A", "B", "C"]:
+            v = float(abc_val.get(c, 0)); n = int(abc_cnt.get(c, 0))
+            if v <= 0 and n == 0: continue
+            share = v / total_val * 100
+            ai = ABC_INFO[c]
+            seg  += f'<div title="Curva {c}: {share:.0f}% do valor" style="width:{share}%;background:{ai["cor"]};height:100%;"></div>'
+            cards += (f'<div style="flex:1;text-align:center;">'
+                      f'<div style="font-size:1.4rem;font-weight:800;color:{ai["cor"]};font-family:\'Plus Jakarta Sans\';">{n}</div>'
+                      f'<div style="font-size:0.66rem;color:{SLATE};font-weight:700;">CURVA {c} · {ai["desc"]}</div>'
+                      f'<div style="font-size:0.72rem;color:{INK};font-weight:600;">{fmt_valor(v)} · {share:.0f}% do valor</div></div>')
+        st.markdown(f"""
+        <div style="background:{CARD};border:1px solid {LINE};border-radius:16px;padding:18px 22px;margin-top:6px;
+                    box-shadow:0 8px 24px rgba(16,19,32,0.05);">
+            <div style="display:flex;height:22px;border-radius:8px;overflow:hidden;margin-bottom:14px;">{seg}</div>
+            <div style="display:flex;gap:8px;">{cards}</div>
+        </div>""", unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+
     # ── Filtros do ranking ──
     st.markdown('<div class="sec-title">Ranking Completo de Fornecedores</div>', unsafe_allow_html=True)
 
-    f1, f2, f3, f4 = st.columns([1.6, 1, 1, 0.7])
+    f1, f2, f3, f4, f5, f6 = st.columns([1.5, 1, 1, 0.85, 1.15, 0.7])
     with f1:
         busca = st.text_input("🔍 Buscar fornecedor", placeholder="Digite o nome...", key="geral_busca")
     with f2:
@@ -1342,7 +1438,10 @@ def page_dashboard(df: pd.DataFrame):
         classes = ["Todas"] + list(CLASSES.keys())
         cls_sel = st.selectbox("Classe", classes, key="geral_cls")
     with f4:
-        st.markdown("<br>", unsafe_allow_html=True)
+        abc_sel = st.selectbox("Curva ABC", ["Todas", "A", "B", "C"], key="geral_abc")
+    with f5:
+        ordem = st.selectbox("Ordenar por", ["Score (maior)", "Valor (maior)", "Valor (menor)"], key="geral_ord")
+    with f6:
         show_n = st.selectbox("Exibir", [50, 100, 200, "Todos"], key="geral_n")
 
     # Aplicar filtros
@@ -1353,6 +1452,16 @@ def page_dashboard(df: pd.DataFrame):
         df_filt = df_filt[df_filt["COMPRADOR"] == comp_sel]
     if cls_sel != "Todas":
         df_filt = df_filt[df_filt["CLASSE"] == cls_sel]
+    if abc_sel != "Todas":
+        df_filt = df_filt[df_filt["CURVA_ABC"] == abc_sel]
+
+    # Ordenação (o RANK exibido continua sendo a posição no ranking por SCORE)
+    if ordem == "Valor (maior)":
+        df_filt = df_filt.sort_values("VALOR_NF", ascending=False)
+    elif ordem == "Valor (menor)":
+        df_filt = df_filt.sort_values("VALOR_NF", ascending=True)
+    else:
+        df_filt = df_filt.sort_values("SCORE_GERAL", ascending=False)
 
     n_show = len(df_filt) if show_n == "Todos" else int(show_n)
     df_show = df_filt.head(n_show)
@@ -1382,13 +1491,17 @@ def page_por_comprador(df: pd.DataFrame):
                .sort_values(ascending=False))
     rank  = list(ranks.index).index(sel) + 1
 
+    valor_carteira = float(pd.to_numeric(dfb.get("VALOR_NF", 0), errors="coerce").fillna(0).sum())
+    n_a_cart = int((dfb["CURVA_ABC"] == "A").sum()) if "CURVA_ABC" in dfb.columns else 0
+
     st.markdown("<br>", unsafe_allow_html=True)
-    c1,c2,c3,c4,c5 = st.columns(5)
+    c1,c2,c3,c4,c5,c6 = st.columns(6)
     with c1: st.markdown(kpi_card("Score Medio", pct(avg), f"Classe {get_class(avg)[0]}", score_bar_color(avg)), unsafe_allow_html=True)
     with c2: st.markdown(kpi_card("Prazo", pct(avgP), f"Peso {int(PESO_PRAZO*100)}%", BAR_BLUE), unsafe_allow_html=True)
     with c3: st.markdown(kpi_card("Qualidade", pct(avgQ), f"Peso {int(PESO_QUAL*100)}%", BAR_GREEN), unsafe_allow_html=True)
-    with c4: st.markdown(kpi_card("Fornecedores", str(len(dfb)), "na carteira", NAVY), unsafe_allow_html=True)
-    with c5: st.markdown(kpi_card("Ranking", f"#{rank}", f"de {len(buyers)} compradores", GOLD), unsafe_allow_html=True)
+    with c4: st.markdown(kpi_card("Fornecedores", str(len(dfb)), f"{n_a_cart} na curva A", NAVY), unsafe_allow_html=True)
+    with c5: st.markdown(kpi_card("Valor Comprado", fmt_valor(valor_carteira), "na carteira", GOLD_500), unsafe_allow_html=True)
+    with c6: st.markdown(kpi_card("Ranking", f"#{rank}", f"de {len(buyers)} compradores", GOLD), unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
