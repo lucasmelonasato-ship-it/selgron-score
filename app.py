@@ -707,13 +707,37 @@ def _parse_month_from_filename(fname: str):
     # Sem padrão de data → usa o nome do arquivo como label
     return 0, 0, base.replace(".xlsx", "").replace(".parquet", "")
 
-@st.cache_data(show_spinner=False)
+# Versão do esquema de colunas derivadas. BUMP quando o formato do df mudar
+# (ex.: nova coluna calculada) — força o cache a recalcular sem precisar de reboot.
+SCHEMA_VERSION = "abc-1"
+
+def _dados_signature():
+    """Assinatura da pasta dados/ (arquivos + mtimes + versão de esquema).
+    Serve de chave de cache: se um arquivo entra/muda, o cache se renova sozinho."""
+    d = _find_dados_dir()
+    if d is None:
+        return ("none", SCHEMA_VERSION)
+    sig = []
+    for f in sorted(os.listdir(d)):
+        if f.lower().endswith((".xlsx", ".xls", ".parquet")) and not f.startswith(("~", ".")):
+            try:
+                sig.append((f, os.path.getmtime(os.path.join(d, f))))
+            except OSError:
+                sig.append((f, 0))
+    return (tuple(sig), SCHEMA_VERSION)
+
 def load_all_snapshots():
+    """Wrapper: passa a assinatura da pasta como chave de cache."""
+    return _load_all_snapshots_cached(_dados_signature())
+
+@st.cache_data(show_spinner=False)
+def _load_all_snapshots_cached(_signature):
     """
     Lê TODOS os arquivos da pasta 'dados/' e retorna:
       (snapshots, erros)
     snapshots = [(label, ano, mes, df), ...] ordenado cronologicamente
     erros     = [(arquivo, motivo), ...]  para diagnóstico visível
+    O argumento _signature (arquivos+mtimes+versão) é só a chave de cache.
     """
     snapshots = []
     erros = []
@@ -2424,6 +2448,14 @@ def main():
                 st.session_state.data_mtime = 0.0
         df = st.session_state.df
         month_label = "Período atual"
+
+    # Blindagem contra cache antigo do Streamlit: garante colunas derivadas
+    # (CURVA_ABC/VALOR_PCT) mesmo que load_all_snapshots devolva dados em cache
+    # gerados antes destas colunas existirem.
+    if df is not None and "CURVA_ABC" not in df.columns:
+        df = add_curva_abc(df)
+    if prev_df is not None and "CURVA_ABC" not in prev_df.columns:
+        prev_df = add_curva_abc(prev_df)
 
     # Salva em sessão para uso nas páginas (evolução etc.)
     st.session_state.df          = df
