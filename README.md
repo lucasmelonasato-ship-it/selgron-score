@@ -1,5 +1,7 @@
 # Selgron — Score de Fornecedores v2.0
 
+> Neste repositório também: **Análise de Quantidade de Compra** → [`analise_compras/`](analise_compras/README.md)
+
 Dashboard web para monitorar a performance dos fornecedores da Selgron Industrial,
 cruzando **Prazo de Entrega** e **Qualidade (Inspeção de Recebimento)** em um único
 score por fornecedor, por comprador e para o setor todo.
